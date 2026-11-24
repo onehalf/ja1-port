@@ -11,12 +11,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      # SDL2 is built from source (sdl2/bundled), as in the release builds: Ubuntu's libsdl2 has no dummy video
+      # driver, which the window tests use.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
+            libxinerama-dev libxkbcommon-dev libwayland-dev wayland-protocols libegl1-mesa-dev libgl1-mesa-dev \
+            libasound2-dev libpulse-dev libudev-dev libdbus-1-dev
       - name: ja1logic tests
         run: cargo test --release --locked
         working-directory: port/ja1logic
       - name: ja1front tests (game-file tests skip without rom/)
-        run: cargo test --release --locked
+        run: cargo test --release --locked --features sdl2/bundled,sdl2/static-link
         working-directory: port/ja1front
 
   windows-build:
