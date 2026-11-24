@@ -1,0 +1,24 @@
+[package]
+name = "ja1front"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "ja1front"
+path = "src/main.rs"
+
+[features]
+default = ["gui"]
+gui = ["dep:sdl2"]
+
+[dependencies]
+png = "0.17"
+ja1logic = { path = "../ja1logic" }
+sdl2 = { version = "0.37", optional = true }
+
+[profile.release]
+panic = "unwind"

@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: ja1logic tests
+        run: cargo test --release --locked
+        working-directory: port/ja1logic
+      - name: ja1front tests (game-file tests skip without rom/)
+        run: cargo test --release --locked
+        working-directory: port/ja1front
+
+  windows-build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - run: sudo apt-get update && sudo apt-get install -y mingw-w64 zip
+      - run: scripts/build-release.sh windows

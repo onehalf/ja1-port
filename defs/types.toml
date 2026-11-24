@@ -1,0 +1,355 @@
+# JA.EXE data types: the single source of truth for struct layouts and typed globals.
+# Read by tools/jatypes.py (decoding dumps, saves and live memory via tools/jactl.py), turned into a C header for
+# Ghidra (./t jatypes --header), later the port. Addresses of globals come from labels.csv (by name), not from here.
+#
+# field = [offset, type, name, evidence, note]
+#   type: u8 i8 u16 i16 u32 i32 ptr | char[N] | <struct> | any of these with [N] for arrays
+#   evidence: V = verified (live dump, save compare or diff test), T = traced in code only, G = guess
+# A field whose size is unknown is typed u8 and says so in its note.
+
+[struct.item]
+size = 0x0C
+doc = "item entry: soldier inventory, XRA enemy templates, g_groundItems"
+fields = [
+  [0x00, "u8", "type", "V", "index into g_itemTable / g_itemNames (0 = Nothing)"],
+  [0x01, "u8", "qty", "V", "quantity / rounds loaded"],
+  [0x02, "u8", "condition", "V", "0..100"],
+  [0x06, "u8", "b6", "G", "FF while in combat (ground items)"],
+  [0x08, "u8[4]", "unitCond", "G", "per-unit conditions?"],
+]
+
+[struct.soldier]
+size = 0x200
+doc = "g_soldiers slot: 0..7 player mercs, 8..15 guards, 0x28..0x2F sector enemies (from XRA.DAT)"
+fields = [
+  [0x000, "item[12]", "items", "V", "0 main hand, 1 secondary hand, 2 head, 4 ear, 6 vest, 7.. vest pockets"],
+  [0x090, "ptr", "ptr90", "T", "pointer; QuickSave stores it as offset (-0x106C18) in +0x98"],
+  [0x098, "u32", "ptr90Saved", "T", "serialised +0x90"],
+  [0x09C, "u8", "visible", "T", "debug page 'visible' (cursor.md:551; was b09C). EngagedAction/AiThink: > 0 lets Santino speak; CombatAction forces 0xFF around ReachTile?"],
+  [0x0A8, "u8", "a8", "G", "differs before/after QuickSave"],
+  [0x0B0, "u8", "b0", "G", "differs before/after QuickSave; changes outside AiThink for every soldier (live_ai: interrupt-driven?)"],
+  [0x0B9, "u8", "hasKeys", "V", "debug page 'has Keys' (cursor.md:551; was b0B9). FindPath: may enter move code 1500 (closed door) from a 0x62D4 tile; a walk into a not-standable tile with it set calls host op 107 = 0x3ACB8 (soldier_update.md:347, tools/ai.py says \"breaks\"); both fit doors, the key meaning is not traced"],
+  [0x0BA, "u8", "aiType", "V", "AI kind: 2 never acts, 4 Santino; 1 and 3 extra rules (only 3 reacts when alerted)"],
+  [0x0BB, "u8", "alert", "V", "AI alert state: 0 calm, 1 alerted (noise), 2 combat, 3 engaged (+0x1D5 > 0)"],
+  [0x0CC, "u8", "cc", "G", "differs before/after QuickSave; changes outside AiThink for every soldier (live_ai: interrupt-driven?)"],
+  [0x0D0, "u16", "lastTargetTile", "T", "same target as last shot: +10 to hit, no +1 AP (ChanceToHit, ShotApCost)"],
+  [0x0D4, "u16", "pathLen", "V", "steps stored in g_paths[slot] by FindPath (max 80)"],
+  [0x0DC, "u16", "target", "T", "debug page 'target' (cursor.md:551; was tileDC). set 0xC41 with lastTargetTile by ClearTarget"],
+  [0x0DE, "u16", "shotEndX", "T", "bullet end point px (FireGun)"],
+  [0x0E0, "u16", "shotEndY", "T", ""],
+  [0x0E2, "u16", "shotHeight", "T", "bullet end height (FireGun)"],
+  [0x0EF, "u8", "reservedAp", "T", "AP held back for the item in hand (0x17C88: 6 for blast kinds 3/5/7/9, else ActionApCost [+4 with +0x16A, at most apLeft]); diff-tested"],
+  [0x0F0, "u16", "actionTicks", "V", "AI: ticks the running action took (timeout 350)"],
+  [0x108, "u16", "knownTile", "V", "AI: where the other side last knew this soldier to be (TargetTile when g_known is fresher, ai_diff)"],
+  [0x10A, "u16", "frameAdd", "V", "drawn frames 0x48 / 0x50 add it (DrawSoldier 0x165E8, soldier_diff)"],
+  [0x10C, "i16", "fatigue", "V", "0..10000; energy +0x18A = 100 - fatigue / 100 (Rest? 0x32754, ai_diff); a hit adds 50 x damage x (10000 - fatigue) / 10000"],
+  [0x10E, "u16", "walkFailTile", "V", "AI: target of a walk that stopped short (CanStandAt? avoids it)"],
+  [0x110, "u16", "salary", "V", "per day"],
+  [0x112, "u16", "salary2", "V", "= salary after hire"],
+  [0x114, "u16", "tile", "V", "56x56 tile index; 0x0C40 = empty slot, 0x0C41 = off map / dead"],
+  [0x116, "u16", "x2", "V", "XRA file: candidate start tile 2; in memory x like +0x126"],
+  [0x118, "u16", "y2", "V", "XRA file: candidate start tile 3; in memory y like +0x128"],
+  [0x11A, "u16", "drawAnchorX", "V", "DrawSoldier writes 15 (32x28 frame) or 9 (20x20): pixels left of x2"],
+  [0x11C, "u16", "drawAnchorY", "V", "DrawSoldier writes 16 or 12: pixels above y2"],
+  [0x120, "u16", "desdest", "T", "debug page 'desdest' (cursor.md:551; was tile120). set with tile on death"],
+  [0x122, "u16", "noiseGridno", "V", "debug page 'noise Gridno' (cursor.md:551; was callTile). AI: tile of this soldier's own call-out (NoiseTile clears it at its own tile, ai_diff); copied to g_callM|E"],
+  [0x124, "u16", "destination", "T", "debug page 'destination' (cursor.md:551; was tile124). set with tile on death / entry"],
+  [0x126, "u16", "x", "V", "world px (TileToX: (t%56)*16+5)"],
+  [0x128, "u16", "y", "V", "world px (TileToY: (t/56)*14+5)"],
+  [0x12A, "u16", "nextdest", "G", "debug page 'nextdest' (cursor.md:551); meaning not traced"],
+  [0x12E, "u16", "whereIWas", "T", "debug page 'where I Was' (cursor.md:551; was tile12E). InitXraEnemy copies the chosen start tile here"],
+  [0x131, "u8", "bypassToGreen", "V", "debug page 'bypass To Green' (cursor.md:551; was calmBonus). AI: bonus to calm rolls; != 0 below alert 3 = behave calm (AlertAction 15, CombatAction 30)"],
+  [0x132, "u16", "aiTarget", "V", "AI: tile or direction (1..8) of the chosen action, 0xC41 none"],
+  [0x134, "u16", "actgrid", "G", "debug page 'actgrid' (cursor.md:551); meaning not traced"],
+  [0x136, "u16", "frameOverride", "V", "!= 0: DrawSoldier shows this frame instead of the script word"],
+  [0x138, "u8", "inPlay", "V", "1 alive in the sector, 0 dead"],
+  [0x13A, "u8[40]", "sees", "V", "knowledge level per opponent (1 seen now, 2..4 older, -1..-3 heard, see g_fresher): enemies index by slot 0..0x27 (UpdateSightings / TargetTile scan 40), mercs/guards by slot-0x28 (ChanceToHit, ai_diff)"],
+  [0x16A, "u8", "b16A", "T", "set: 0x17C88 reserves 4 AP more (at most apLeft)"],
+  [0x16D, "u8", "deadFlag", "V", "1 after death"],
+  [0x16E, "char[9]", "nickname", "V", "from profile +0x00 (names <= 8 chars; the 10th byte +0x177 is a separate flag)"],
+  [0x177, "u8", "b177", "V", "StepApCost base 3; FindPath: codes below 3000 cost 1000"],
+  [0x179, "u8", "profileId", "V", "index into g_profiles; 64 = guard / enemy"],
+  [0x17A, "u8", "slot", "V", "own slot number"],
+  [0x17B, "u8", "colour", "V", "remap table of the soldier sprite (+8 for the selected merc); InitXraEnemy adds 4, guards 0x17"],
+  [0x17C, "u8", "b17C", "T", "InitXraEnemy: Random(8)+2"],
+  [0x17D, "u8", "b17D", "V", "3 after death"],
+  [0x17E, "u8", "duty", "T", "0 = on duty (counted in g_teamOnDuty); 1..7 = an off-duty state (panel text 0x9662A + 8 x duty); 1 and 4 are paid half (CalcTeamPay, ledger diff-tested)"],
+  [0x182, "u8", "inCurSector", "V", "1 = in the current sector"],
+  [0x183, "u8", "hp", "V", "current health"],
+  [0x184, "u8", "hpMax", "V", ""],
+  [0x185, "u8", "wounds", "V", "max - current"],
+  [0x186, "u8", "b186", "V", "FF after death"],
+  [0x188, "u8", "deadAndRemoved", "V", "debug page 'dead And Removed' (cursor.md:551; was b188). 1 after death"],
+  [0x18A, "u8", "energy", "V", "from profile +0x2B (100); reduces AP and to-hit below 100"],
+  [0x18B, "u8", "agility", "V", ""],
+  [0x18C, "u8", "dexterity", "V", ""],
+  [0x18D, "u8", "wisdom", "V", "head-wound stat loss (0x38D80)"],
+  [0x18E, "u8", "medical", "V", ""],
+  [0x18F, "u8", "explosives", "V", ""],
+  [0x190, "u8", "mechanical", "V", ""],
+  [0x191, "u8", "marksmanship", "V", ""],
+  [0x192, "u8", "level", "V", "experience level"],
+  [0x195, "i8", "busyBeingHit", "G", "debug page 'busy Being Hit' (cursor.md:551); meaning not traced"],
+  [0x197, "u8", "forcedToStop", "V", "debug page 'forced to Stop' (cursor.md:551; was b197). AI: != 0 -> AiThink does nothing"],
+  [0x199, "u8", "trainWhat", "V", "duty 2 (training): 0 = health/agility/dexterity, 1 medical, 2 explosives, 3 mechanical, 4 marksmanship (MorningDuties? 0x4B48C, duties_diff)"],
+  [0x19A, "u8", "healed", "V", "health points healed by the morning duties (rest, patient, doctor; duties_diff)"],
+  [0x19B, "u8", "status", "T", "0x62A68 checks it"],
+  [0x19C, "u8", "b19C", "V", "personality from profile +0x2F: 1 informer, 2 forgetful, 3 relentless, 4 nervous alone, 5 cannot swim, 6 poor shot, 7 native, 8 quits after a kill (docs/spec/personality.md)"],
+  [0x19D, "u8", "b19D", "V", "cleared when the merc leaves the team (0x50618, 0x50790)"],
+  [0x1A1, "u8", "facing", "V", "direction 1..8 the soldier faces"],
+  [0x1A2, "u8", "desdir", "V", "debug page 'desdir' (cursor.md:551; was turnTo). direction it is turning to"],
+  [0x1A5, "u8", "apLeft", "T", "action points left this turn (ChanceToHit motion term, ./t combat)"],
+  [0x1A6, "u8", "nextact", "G", "debug page 'nextact' (cursor.md:551); meaning not traced"],
+  [0x1A8, "u8", "b1A8", "V", "AI: cleared when a walk is chosen"],
+  [0x1AA, "u8", "eyeRow", "V", "face row where the panel draws the eye strip: JAGGED.DAT byte [profileId], set by LoadMercFace 0x286C4 (validate/diff/panel_data_diff.py)"],
+  [0x1AB, "u8", "justArrived", "V", "debug page 'just Arrived' (cursor.md:551; was b1AB). AI: forces the calm patrol walk; cleared when a walk arrives"],
+  [0x1AD, "u8", "shaded", "V", "!= 0: DrawSoldier uses remap table 0x1B; script command 0x1F0 toggles it"],
+  [0x1AF, "u8", "pathPos", "T", "FindPath resets it to 0 with a new path (next step index?)"],
+  [0x1B0, "u8", "moved", "V", "debug page 'moved' (cursor.md:551; was turnDone). AI: 1 = this soldier's turn is over"],
+  [0x1B1, "u8", "b1B1", "T", "ChanceToHit: -5 with +0x1B3 in {1,2,4..7} beyond 5 tiles"],
+  [0x1B2, "u8", "groundUnder", "V", "ground byte t0 under the soldier (InWater: >= 0x6C)"],
+  [0x1B3, "u8", "b1B3", "T", ""],
+  [0x1B4, "u8", "objectUnder", "V", "object t1 under the soldier (0x1C, 0x1F = not water)"],
+  [0x1B8, "u8", "stopped", "V", "debug page 'stopped' (cursor.md:551; was b1B8). AI: 0 -> AiThink stops after the alert update"],
+  [0x1B9, "u8", "service", "T", "debug page 'service' (cursor.md:551; was b1B9). == 4: -20 to hit"],
+  [0x1BC, "u8", "hitFlag", "T", "FireGun roll succeeded"],
+  [0x1BD, "u8", "b1BD", "T", "InitXraEnemy sets 0x6D"],
+  [0x1BE, "u8", "aiming", "T", "debug page 'aiming' (cursor.md:551; was b1BE). ClearTarget sets 0"],
+  [0x1BF, "u8", "firing", "G", "debug page 'firing' (cursor.md:551); meaning not traced"],
+  [0x1C0, "u8", "noiseVolume", "V", "debug page 'noise Volume' (cursor.md:551; was callLevel). AI: level of this soldier's own call-out (NoiseTile, NewsValue?, ai_diff)"],
+  [0x1C1, "u8", "rethink", "V", "AI: drop the running action and choose again"],
+  [0x1C2, "u8", "override", "T", "debug page 'override' (cursor.md:551; was slot1C2). ClearTarget sets 0x40 (no slot) with attackSlot"],
+  [0x1C4, "u8", "underFire", "V", "debug page 'underFire' (cursor.md:551; was b1C4). AI: forces alert 2 (types 3-4) and keeps tired soldiers acting"],
+  [0x1C9, "i8", "artillery", "G", "debug page 'artillery' (cursor.md:551); meaning not traced"],
+  [0x1CF, "u8", "postFacing", "V", "AI: direction to face when idle (1..8)"],
+  [0x1D1, "u8", "aiAction", "V", "AI action code: 1 turn, 2-5/8/13 walk, 6 shout, 7 alarm, 9 operate, 10 radio, 11 shoot, 12 throw, 14 stab, 16 use on target"],
+  [0x1D3, "u8", "attitude", "V", "debug page 'attitude' (cursor.md:551; was trait2). AI personality 0..5 (weights every roll; 5 never presses a weak target)"],
+  [0x1D4, "u8", "orders", "V", "debug page 'orders' (cursor.md:551; was trait1). AI personality 0..4 (raised by 1 on entering combat below 2)"],
+  [0x1D5, "i8", "numOpponents", "T", "debug page '# opponents' (cursor.md:551; was b1D5). > 0 enables the sees-shooter dodge bonus (ChanceToHit)"],
+  [0x1D6, "u8", "actionRunning", "V", "AI: AiDoAction returned 1"],
+  [0x1D7, "u8", "inTheWay", "V", "debug page 'in the Way' (cursor.md:551; was b1D7). AI: forces a calm patrol walk, cleared by it"],
+  [0x1D8, "u8", "curOppnum", "V", "debug page 'cur oppnum' (cursor.md:551; was attackSlot). AI: target slot of the chosen attack"],
+  [0x1D9, "u8", "kills", "T", "kills shown on the office ledger (View Team, DrawOfficeLedger 0x4C41C \"Kills\")"],
+  [0x1DA, "u8", "killerSlot", "V", "slot of the soldier that killed this one"],
+  [0x1DB, "u8", "gassed", "G", "debug page 'gassed' (cursor.md:551); meaning not traced"],
+  [0x1E0, "u8", "b1E0", "T", "InitXraEnemy: Random(4)"],
+  [0x1E5, "i8", "dayHired", "T", "compared with g_day when the merc is fired (0x4904A, 0x50A22): 0 = refund + 4 grudge tries (strategic.md Firing a merc)"],
+  [0x1E8, "u8[10]", "anim", "T", "animation codes, current = anim[2*animIdx]; live: 0x04 standing, 0x1B gun raised, 0x15/0x0A moving"],
+  [0x1F2, "u8", "tilesMoved", "T", "debug page 'tiles Moved' (cursor.md:551; was motion). ChanceToHit motion term"],
+  [0x1F3, "u8", "animIdx", "T", "index into anim (x2)"],
+  [0x1F6, "i8", "destFirst", "G", "debug page 'DestFirst' (cursor.md:551); meaning not traced"],
+  [0x1F7, "u8", "oldOppnum", "G", "debug page 'OLD oppnum' (cursor.md:551); meaning not traced"],
+  [0x1F8, "u16", "oldGridno", "G", "debug page 'oldgridno' (cursor.md:551); meaning not traced"],
+  [0x1FC, "u8", "hitMargin", "T", "FireGun roll margin"],
+  [0x1FD, "u8", "aim", "T", "aim clicks (AimLoop)"],
+  [0x1FE, "u8", "b1FE", "T", "AiIdle clears the target only when set"],
+]
+
+[struct.profile]
+size = 0x5A
+doc = "Merc profile (g_profiles, index = profile id; 0-59 AIM mercs, 60-63 native guides Elio/Hamous/Juan/Wahan); initial table = EDT\\NEWPROF.EDT (LoadNewProfEdt reads 64 x 0x5A), saves store 60; confirmed on the AIM screen"
+fields = [
+  [0x00, "char[10]", "nickname", "V", ""],
+  [0x0A, "char[30]", "name", "V", ""],
+  [0x28, "u16", "salary", "V", "per day; doubled by the negotiation branch"],
+  [0x2A, "u8", "health", "V", ""],
+  [0x2B, "u8", "energy", "V", "100 in all records; copied to soldier +0x18A"],
+  [0x2C, "u8", "agility", "V", ""],
+  [0x2D, "u8", "marksmanship", "V", ""],
+  [0x2E, "u8", "wisdom", "V", ""],
+  [0x35, "u8", "availDay", "T", "MercRefusalReason 1; > 100: refuses while g_aimSuccessPoints < this - 100"],
+  [0x36, "u8", "maxFatalityRate", "T", "refusal 2 if AimRate(0) fatality % >= this"],
+  [0x37, "u8", "maxTurnoverRate", "T", "refusal 3 if AimRate(1) turnover % >= this"],
+  [0x38, "u8", "maxBadDayStreak", "T", "refusal 4 if <= g_badDayStreak"],
+  [0x39, "u8", "maxNonPaymentRate", "T", "refusal 5 if AimRate(2) non-payment % >= this; LoadGame patches profiles 24/26"],
+  [0x3A, "u8", "hates", "V", "merc it hates now (99 none): morning HatedCheck? 0x44C10 ultimatum PST 6 when that merc is in the team, then night DayEndMercUpdate? 0x43F54: personality 3 (guide OverEnth) removes that merc, others leave; set to 99 when the merc leaves and +0x3C (not 99) equals it (0x50618); guide Chart 1 Hates (docs/spec/personality.md Hate and the night)"],
+  [0x3B, "u8", "hatesMerc", "T", "refusal 7: id of a merc it reacts to"],
+  [0x3C, "u8", "toHate", "V", "merc it will hate (99 none): a night with that merc in the team copies it to +0x3A; HatedCheck? sets it = +0x3A (ultimatum given); refusal 8 while that merc is in the team; guide Chart 1 To Hate (docs/spec/personality.md Hate and the night)"],
+  [0x3D, "u8", "firedByYou", "V", "1 after you fire it (refusal 9)"],
+  [0x3E, "u16", "b3E", "T", "refusal 12 if != 0"],
+  [0x40, "u8", "medical", "V", ""],
+  [0x41, "u8", "mechanical", "V", ""],
+  [0x42, "u8", "dexterity", "V", ""],
+  [0x43, "u8", "explosives", "V", ""],
+  [0x44, "u8", "level", "V", "experience level"],
+  [0x4B, "u8", "teamStatus", "V", "100 on team, 50 just hired, 1 after firing"],
+  [0x4C, "u8", "b4C", "T", "set 100 by the salary negotiation; refusal 6 (buddy?)"],
+  [0x4D, "u8", "b4D", "T", "refusal 13: id of a merc it reacts to"],
+  [0x50, "u8[10]", "kit", "V", "item type per place 0..9 written when the merc leaves (0x50618; 0 = nothing / stored / money)"],
+]
+
+[struct.plant]
+size = 12
+doc = "g_plants entry: a sap processing plant"
+fields = [
+  [0, "i32", "capacity", "T", "trees per day it processes (CalcProcessCap; ledger diff-tested)"],
+  [4, "i32", "sector", "T", "sector index; CalcProcessCap reads only the low byte"],
+  [8, "u8", "state", "T", "2 = working (counts for g_processCap)"],
+  [9, "u8", "livepl", "G", "LIVEPL/DEADPL records"],
+  [10, "u8", "items", "G", "ITEM records"],
+  [11, "u8", "pad", "G", ""],
+]
+
+[struct.sectorState]
+size = 9
+doc = "g_sectorTbl9 entry (strategic state per sector); all bytes VERIFIED live"
+fields = [
+  [0, "u8", "flags", "V", "bit0 owned; barrier bits 2 N, 4 E, 8 S, 0x10 W (mirrored in the neighbour)"],
+  [1, "u8", "enemies", "V", "enemies alive"],
+  [2, "u8", "mercs", "V", "our mercs in the sector"],
+  [3, "u8", "tappers", "V", ""],
+  [4, "u8", "guards", "V", ""],
+  [5, "u8", "b5", "G", "unused?"],
+  [6, "u8", "trees", "V", "Fallow trees (JAGGED.DAT)"],
+  [7, "u8", "workable", "V", "= SectorWorkable 0x41E1C"],
+  [8, "u8", "unhealthy", "V", "unhealthy trees"],
+]
+
+[struct.tilePair]
+size = 4
+doc = "(tile, value) pair in g_sectors; tile 0x0C40 = empty, 0x0C41 = consumed trigger"
+fields = [
+  [0, "u16", "tile", "V", ""],
+  [2, "i16", "value", "V", "lock strength / trigger level (negative = inverted gate)"],
+]
+
+[struct.sector]
+size = 0xB1
+doc = "g_sectors record (from JAGGED.DAT + game state)"
+fields = [
+  [0x00, "tilePair[12]", "doors", "T", "hypothesis: doors (SectorDoorLookup?)"],
+  [0x30, "tilePair[10]", "locks", "T", "lock strength <= 99; SectorLockLookup? scans 12 pairs (quirk: reads 2 triggers)"],
+  [0x58, "tilePair[10]", "triggers", "V", "level-gated tile triggers (CheckSectorTileTriggers, diff-tested)"],
+  [0x80, "u8", "b80", "T", "from JAGGED.DAT"],
+  [0x81, "u8", "b81", "T", "from JAGGED.DAT"],
+  [0x96, "u8[8]", "enemySlots", "V", "slot 0x28+k: 1 present (pass 2), 2 (pass 1), FE killed, FF none"],
+  [0x9E, "u8", "specialItem", "V", "item an enemy here carries (0x79 Micro-Purifier)"],
+  [0x9F, "u8", "homeSector", "T", "used by 0x60680"],
+  [0xA9, "u8", "hasTmp", "V", "a sec%02d.tmp exists (saved with day/quick saves)"],
+  [0xAA, "u8", "bAA", "T", "ownership? (ResolveSectorBattle)"],
+  [0xAF, "u8", "mines", "T", "BuryMine 0x3CB24"],
+]
+
+[struct.tile]
+size = 8
+doc = "g_tileMap entry (56x56)"
+fields = [
+  [0, "u8", "t0", "T", "ground sprite (g_tileSprites[t0]); draw diff-tested (tiles_diff); not saved in sec%02d.tmp"],
+  [1, "u8", "t1", "T", "object sprite 157+t1, layer by g_t1Class (<6 ground pass, 6 = 2x2 composite, >=7 tall); 0x86 = fallow tree (cleared with sectorState.trees-- by 0x173B4, 0x1AC68)"],
+  [2, "u8", "t2", "T", "overlay sprite 413+t2 (t2Class < 12: ground pass; > 0x3F: overlay pass, on top of objects)"],
+  [3, "u8", "t3", "T", "roof / interior: > 0x50 (not 0x73) = roof sprite 413+t3 drawn over everything; g_t3GroundVisible[t3] gates ground + tall objects; changes as mercs enter buildings"],
+  [4, "u8", "t4", "T", "shadow: t4 & 0x7F < 99 = shadow id (g_shadowTbl), < 0x40 = 2x2 shadow; bit 7 unknown"],
+  [5, "u8", "occupant", "V", "soldier slot (64 = none)"],
+  [6, "u8", "groundItem", "V", "index into g_groundItems (255 = none)"],
+  [7, "u8", "t7", "V", "always 0"],
+]
+
+[struct.weaponStats]
+size = 6
+doc = "g_weaponStats entry, item types 1..16"
+fields = [
+  [0, "u8", "class", "T", "1 pistol, 2 shotgun, 3 rifle, 4 knife"],
+  [1, "u8", "ammoItem", "T", ""],
+  [2, "u8", "extraAp", "T", ""],
+  [3, "u8", "speed", "T", ""],
+  [4, "u8", "tracking", "T", ""],
+  [5, "u8", "b5", "G", "damage?"],
+]
+
+[struct.itemType]
+size = 0x0C
+doc = "g_itemTable entry"
+fields = [
+  [0x02, "u8", "kind", "T", "0x92 gun, 0x96 knife, 0x9B mine, 0xA1 gear"],
+  [0x05, "u8", "clip", "V", "gun: rounds a reload adds (MsgReloaded? 0x40094, ai_diff reload); also the wear factor"],
+  [0x06, "u8", "stackClass", "V", "AddStashItem? 0x51D50: < 2 = one record (+ attachment), else one record per stacked unit"],
+  [0x09, "u8", "repairable", "V", "!= 0: the repair duty mends it (0x48684, duties_diff)"],
+  [0x0B, "u8", "range", "T", "weapon range in tiles"],
+]
+
+# Typed globals: name (must exist in labels.csv) = type
+[global]
+g_soldiers = "soldier[48]"
+g_profiles = "profile[64]"
+g_sectorTbl9 = "sectorState[60]"
+g_sectors = "sector[60]"
+g_tileMap = "tile[3136]"
+g_groundItems = "item[200]"
+g_stashCounts = "u8[136]"
+g_greed = "u8[64]"
+g_aimResignations = "u8"
+g_statProgress = "i16[9][8]"
+g_itemNames = "char[15][136]"
+g_weaponStats = "weaponStats[16]"
+g_itemTable = "itemType[136]"
+g_enemyDiffHitMod = "i16[3]"
+g_officeHotspots = "i16[32]"
+g_soldiersPtr = "soldier*"
+g_paths = "u8[80][48]"
+g_moveCode = "u16[3136]"
+g_dirStep = "i32[8]"
+g_known = "i8[48]"
+g_rememberE = "u8[40][8]"
+g_rememberM = "u8[8][16]"
+g_santinoSpoke = "u8"
+g_lastSeenE = "u16[40][8]"
+g_lastSeenM = "u16[8][16]"
+g_lastSpotter = "u8"
+g_retreatRadius = "u8[6]"
+g_sightRange = "u8[73]"
+g_homeSafeDay = "i16[3]"
+g_hotSectors = "u8[5]"
+g_sightBlock = "i32"
+g_datFile = "ptr"
+g_saveName = "char[26]"
+g_curSector = "u8"
+g_day = "u16"
+g_viewX = "i32"
+g_viewY = "i32"
+g_viewCols = "i32"
+g_viewRows = "i32"
+g_tileset = "u8"
+g_roofsOn = "u8"
+g_shadowsOn = "u8"
+g_t0Class = "u8[157]"
+g_t1Class = "u8[256]"
+g_t2Class = "u8[155]"
+g_t1GroundVisible = "u8[256]"
+g_t3GroundVisible = "u8[256]"
+g_quickSaveInCombat = "u8"
+g_quickSaveModeChosen = "u8"
+g_argAllowSave = "u8"
+g_sectorsGained = "i32"
+g_lastSectorGained = "i32"
+g_timeCompression = "u8"
+g_purifierPending = "u8"
+g_difficulty = "u8"
+g_balance = "i32"
+g_prevBalance = "i32"
+g_teamSalaries = "i32"
+g_nativesCost = "i32"
+g_dayExpenses = "i32"
+g_workerPool = "i32"
+g_processCap = "i32"
+g_teamCount = "i32"
+g_teamOnDuty = "i32"
+g_treePrice = "i32"
+g_treesWorkable = "i32"
+g_treesOwned = "i32"
+g_treesTapped = "i32"
+g_dayIncome = "i32"
+g_balanceAfterDay = "i32"
+g_dayNet = "i32"
+g_teamHalfSalaries = "i32"
+g_teamPay = "i32"
+g_tappers = "i32"
+g_guards = "i32"
+g_workers = "i32"
+g_idlePool = "i32"
+g_nativeWage = "i32"
+g_tappersCost = "i32"
+g_guardsCost = "i32"
+g_sectorsOwned = "i32"
+g_plantsOwned = "i32"
+g_plants = "plant[4]"
+g_enemyDeaths = "i32"

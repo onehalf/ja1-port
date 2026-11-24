@@ -1,0 +1,40 @@
+# JA1 port play settings. The setup screen (ja1front with no arguments, or --setup) writes ja1.cfg beside the
+# program; you can edit it by hand. An environment variable of the same option wins over the file.
+# The values below are the defaults.
+
+# Grab the mouse as the original did in DOS; Ctrl+F10 frees the mouse. (off | on)
+capture_mouse = on
+
+# Pointer speed with Grab mouse on. (slow | original | fast)
+pointer_speed = original
+
+# Black bars at the sides. (off | on)
+fullscreen = off
+
+# 2x  640 x 400, 3x  960 x 600, 4x  1280 x 800, 5x  1600 x 1000 (2 | 3 | 4 | 5)
+window_size = 4
+
+# Soft edges, not square pixels. (off | on)
+soft_pixels = off
+
+# Dark lines, as an old monitor. (off | on)
+scanlines = off
+
+# Off: no music at all. (off | on)
+music = on
+
+# No sound while another window has the focus. (off | on)
+mute_when_away = on
+
+# Always show the text of speech. (off | on)
+subtitles = off
+
+# Sir-tech logo, title and credits at the start. (off | on)
+title_films = on
+
+# The island film at a new game only. (off | on)
+intro = on
+
+# What the lever starts: the main menu, or the last day (saves/DAY.SAV). The other values need test saves that
+# are not included; a missing save starts the main menu. (menu | continue | fight | full-day | grenade | no-money)
+start = menu

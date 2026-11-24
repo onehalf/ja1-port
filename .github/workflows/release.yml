@@ -1,0 +1,46 @@
+name: Release
+
+# Push a tag v* (git tag v1.0.0 && git push origin v1.0.0): builds the Linux and Windows archives and attaches them
+# to a draft GitHub release. Publish the draft by hand after a look.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - name: Build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake zip mingw-w64 libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxss-dev libxinerama-dev libxkbcommon-dev libwayland-dev wayland-protocols libegl1-mesa-dev \
+            libgl1-mesa-dev libasound2-dev libpulse-dev libudev-dev libdbus-1-dev
+      - run: scripts/build-release.sh linux
+      - run: scripts/build-release.sh windows
+      - name: Start test (no game files, no display -> the message and exit code 1)
+        run: |
+          mkdir -p build/empty && cp build/target-linux/release/ja1front build/empty/
+          cd build/empty && set +e
+          ./ja1front --menu 2> err.txt; rc=$?
+          cat err.txt; test $rc -eq 1 && grep -q "No Jagged Alliance game files found" err.txt
+      - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          draft: true
+          files: dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ja1-port-packages
+          path: dist/*
