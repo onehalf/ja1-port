@@ -83,6 +83,14 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md): how the port was written (keep the orig
 addresses), how to set up the RE tools, and how the diff tests work. Numbers such as `#24` or "issue #2" in comments
 point to the private development tracker; the facts they carry are in the comment or in `docs/`.
 
+## Credits
+
+Most of the reverse engineering, code and tests were written by AI coding agents:
+
+- **Claude** (Anthropic, via Claude Code): reverse engineering, the Rust port, the diff tests, the play bot.
+- **Codex** (OpenAI): scoping, code review, bug fixes.
+- **DeepSeek** (run locally): agent runs on the local loop.
+
 ## Legal
 
 Jagged Alliance is a trademark of its owner (THQ Nordic). This project is not affiliated with or endorsed by the
