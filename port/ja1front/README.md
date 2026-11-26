@@ -1,4 +1,4 @@
-# ja1front
+# ja1front (program: ja1-port)
 
 Front-end (window, screens, input) of the JA1 port. **How to port: see CONTRIBUTING.md "How the port was written" (the maintainer 2026-10-31,
 issue #37).**
@@ -6,10 +6,10 @@ issue #37).**
 ## Build and run
 
     ~/.cargo/bin/cargo build --release && ~/.cargo/bin/cargo test
-    ./target/release/ja1front ../../rom/JA1.gog ../../build/game113b/JA.EXE --menu [SAVE_DIR]   # the game
+    ./target/release/ja1-port ../../rom/JA1.gog ../../build/game113b/JA.EXE --menu [SAVE_DIR]   # the game
 
 `--menu` opens the window at the main menu (world_load.md section 12); day saves go to SAVE_DIR (or `JA1_SAVE_DIR`).
-`build/game113b/` comes from `validate/patch113b.sh` (`./t check` runs it). Other modes (`./target/release/ja1front`
+`build/game113b/` comes from `validate/patch113b.sh` (`./t check` runs it). Other modes (`./target/release/ja1-port`
 with no arguments prints this list):
 
 | Mode | What it does |
@@ -32,18 +32,18 @@ Reads at run time: the CD image `rom/JA1.gog` (own ISO 9660 reader, `src/iso.rs`
 In the first viewer (`[sector]`): arrows scroll one tile (clamped to the map), PageUp / PageDown = previous / next
 sector (1..60), Escape quits.
 
-    ./target/release/ja1front ../../rom/JA1.gog ../../rom/JA.EXE --world SAVE OUT
+    ./target/release/ja1-port ../../rom/JA1.gog ../../rom/JA.EXE --world SAVE OUT
 
 writes the world built from JA.EXE, JAGGED.DAT and the day save SAVE ([world_load.md](../../docs/spec/world_load.md)
 sections 1-3, no sector entry) to OUT as the section 6 world image (94,042 bytes) and exits 0. Loader: `src/world.rs`.
 
-    ./target/release/ja1front ../../rom/JA1.gog ../../rom/JA.EXE --enter SAVE SEED OUT
+    ./target/release/ja1-port ../../rom/JA1.gog ../../rom/JA.EXE --enter SAVE SEED OUT
 
 enters the save's sector (world_load.md section 4: map from TERRAIN.DAT, `ja1_enter_sector` of `port/ja1logic`
 with the front-end as host, one draw of the view), writes the world image to OUT and prints `seed S draws D` (end
 seed, count of random numbers drawn). SEED = start seed (decimal u32). Works without the `gui` feature.
 
-    ./target/release/ja1front ../../rom/JA1.gog ../../rom/JA.EXE --play SAVE [SEED] [--png OUT]
+    ./target/release/ja1-port ../../rom/JA1.gog ../../rom/JA.EXE --play SAVE [SEED] [--png OUT]
 
 enters the sector the same way (no SEED = the clock) and shows it with its soldiers in the window (arrows scroll,
 Escape quits), or writes the 14 x 12 tile view to OUT. The first view is the world's view_x / view_y.

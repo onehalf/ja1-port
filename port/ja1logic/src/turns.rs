@@ -77,6 +77,22 @@ impl T {
 
     // ---- First merc ----
     fn first_merc(&self) -> i32 {
+        if crate::fanfix::on(38) {
+            // #70 F38: 1.15m FirstMerc? 0x2AC69 + tail 0x8AE73 / 0x8AFAD: health >= 15 first, then >= 1 (signed);
+            // duty 8 counts only while +0x194 is 0.
+            for min in [15, 1] {
+                for k in 0..8 {
+                    let duty = self.g8(k, 0x17E);
+                    if self.g8(k, 0x182) != 0
+                        && (duty == 0 || (duty == 8 && self.g8(k, 0x194) == 0))
+                        && self.s8(k, 0x183) as i32 >= min
+                    {
+                        return k as i32;
+                    }
+                }
+            }
+            return NO_SLOT as i32;
+        }
         for k in 0..8 {
             if self.g8(k, 0x182) != 0 && matches!(self.g8(k, 0x17E), 0 | 8) && self.g8(k, 0x183) != 0 {
                 return k as i32;
@@ -226,7 +242,17 @@ impl T {
         // 6.
         for k in 0x28..0x30 {
             let id = self.g8(k, 0x17A);
-            if get(self.w().bled, BLED_LEN, id as usize) != 0 && self.s8(k, 0x9C) > 0 {
+            // F15 (1.15m EnemiesTurn? 0x124CA + cave 0x18E98): also with see-all 0x93458, and a down enemy
+            // (+0x186 > 0) first gets SlideViewToTile? 0x3F578 on its tile +0x114.
+            let fan = crate::fanfix::on(15);
+            // (the cave adds the two bytes: AL = (+0x9C > 0) + see-all, so 1 + 0xFF counts as not seen)
+            let vis = (self.s8(k, 0x9C) > 0) as u8;
+            let seen = if fan { vis.wrapping_add(self.w().follow_all) != 0 } else { vis != 0 };
+            if get(self.w().bled, BLED_LEN, id as usize) != 0 && seen {
+                if fan && self.s8(k, 0x186) > 0 {
+                    let t = self.g16(k, 0x114) as i16 as i32;
+                    self.call(op::SLIDE_VIEW, &[t]);
+                }
                 let on = self.rec(k).is_some_and(|r| r.on_screen());
                 if on {
                     self.call(op::EFFECT_SLOT, &[id as i32, 3]);
@@ -248,6 +274,10 @@ impl T {
             let t = i16::from_le_bytes([get(fx, FX_LEN, b + 6), get(fx, FX_LEN, b + 7)]) as i32;
             for o in 0..4 {
                 put(fx, FX_LEN, b + o, 0xFF);
+            }
+            if crate::fanfix::on(18) {
+                // F18 (1.15m EndTurn? 0x1220D): each effect that goes off turns time compression off.
+                crate::ai::clock::time_compress(self.w, self.h, 0);
             }
             let kind = get(fx, FX_LEN, b + 8);
             let owner = get(fx, FX_LEN, b + 0xB);
@@ -386,9 +416,14 @@ impl T {
         // 2.
         for k in 0..8 {
             if self.g8(k, 0x182) != 0 && self.g8(k, 0x17E) == 8 {
-                if self.g8(k, 0x1B0) == 0 {
+                let left = self.g8(k, 0x1B0);
+                if left == 0 {
                     self.p8(k, 0x17E, 0);
-                } else {
+                }
+                if crate::fanfix::on(38) {
+                    // #70 F38: 1.15m MercsTurn? 0x12F24 writes +0x194 = +0x1B0 (0 too) on both ways.
+                    self.p8(k, 0x194, left);
+                } else if left != 0 {
                     self.p8(k, 0x194, 1);
                 }
                 if self.w().kept_merc != self.g8(k, 0x17A) {
@@ -400,7 +435,8 @@ impl T {
         self.w().shown_slot = NO_SLOT as i32;
         let km = self.w().kept_merc;
         if km < 8 {
-            let s = self.w().selected as usize;
+            // #70 F38: 1.15m MercsTurn? 0x12F6B reads the kept merc's record, 1.13b the selected one's.
+            let s = if crate::fanfix::on(38) { km } else { self.w().selected } as usize;
             if self.g8(s, 0x182) != 0 && self.s8(s, 0x183) >= 10 {
                 self.w().shown_slot = km as i32;
                 self.p8(s, 0x1B0, 0);
@@ -432,6 +468,10 @@ impl T {
         self.w().view_hold = 0;
         // 8.
         let ss = self.w().shown_slot;
+        // #70 F61 (row 87): 1.15m 0x13033 calls cave 0x8AF04 = CursorItemBack? 0x53660 before SelectMerc? 0x1148C.
+        if crate::fanfix::on(61) {
+            self.call(op::CURSOR_BACK, &[]);
+        }
         if self.call(op::LOW_AP_STOP, &[ss, 1, 1]) == 0 {
             self.w().selected = self.first_merc() as u8;
         }
@@ -477,8 +517,10 @@ impl T {
             keep = true;
             self.w().redraw_pending = 0;
         }
-        // 3.
-        self.call(op::TURN_UI, &[]);
+        // 3. (F20: 1.15m drops this call to the ret-only stub 0x6A960 for room; nothing a player sees.)
+        if !crate::fanfix::on(20) {
+            self.call(op::TURN_UI, &[]);
+        }
         // 4.
         if self.w().combat != 0 {
             self.w().round_lock = 1;
@@ -520,6 +562,23 @@ impl T {
             }
         } else {
             self.w().handed_over = 0;
+        }
+        // F20 (1.15m 0x127E2 -> 0x12BEB): redraw_next is handled here, not at step 24. In combat the kept turn start
+        // runs at the end of this New turn; out of combat redraw_pending = 1 and the turn hands over as in step 7b.
+        if crate::fanfix::on(20) && self.w().redraw_next != 0 {
+            keep = true;
+            let pending = self.w().combat as i32 ^ 1;
+            let w = self.w();
+            w.redraw_next = 0;
+            w.redraw_pending = pending;
+            if pending != 0 {
+                w.interrupt_turn = 1;
+                w.kept_merc = NO_SLOT;
+                w.handed_over = 1;
+                w.round_lock2 = 0;
+                w.round_lock = 0;
+                return 0;
+            }
         }
         // 8.
         {
@@ -606,6 +665,10 @@ impl T {
                     self.w().spotted = NO_SLOT as i32;
                 }
                 let ss = self.w().shown_slot;
+                // #70 F61 (row 87): 1.15m 0x12A17 calls cave 0x8AF04 = CursorItemBack? first.
+                if crate::fanfix::on(61) {
+                    self.call(op::CURSOR_BACK, &[]);
+                }
                 self.call(op::LOW_AP_STOP, &[ss, 0, 0]);
                 let sel = self.w().selected;
                 if sel < 8 {
@@ -651,7 +714,11 @@ impl T {
             self.call(op::SECTOR_SPEECH, &[x as i32, cs]);
         }
         // 20.
-        if self.w().cur_sector == 0 && self.w().santino_spoke != 0 && self.w().stage < 5 {
+        // F19 (1.15m 0x12B50): the stages start only after the loop pass that follows Santino's quote (spoke = 2);
+        // with spoke = 1 the stage blasts in sector 0 hit cache tiles that Explode dat still skips.
+        let spoke = self.w().santino_spoke;
+        let spoke_ok = if crate::fanfix::on(19) { spoke == 2 } else { spoke != 0 };
+        if self.w().cur_sector == 0 && spoke_ok && self.w().stage < 5 {
             let st = self.w().stage.wrapping_add(1);
             self.w().stage = st;
             if st < 4 {
@@ -677,8 +744,8 @@ impl T {
         if keep {
             self.call(op::KEPT_TURN_START, &[]);
         }
-        // 24.
-        if self.w().redraw_next != 0 {
+        // 24. (F20: gone; handled before step 8.)
+        if !crate::fanfix::on(20) && self.w().redraw_next != 0 {
             self.w().redraw_next = 0;
             self.w().redraw_pending = 1;
         }
@@ -717,6 +784,10 @@ impl T {
 
     // ---- Next turn (op 114; original 0x12D58 calls panel redraw 0x12CBC) ----
     fn next_turn(&self, mode: u8) {
+        // #70 F29 (row 18): 1.15m enters at 0x12D55, CursorItemBack? 0x53660 first (also before the busy return).
+        if crate::fanfix::on(29) {
+            self.call(op::CURSOR_BACK, &[]);
+        }
         // 1.
         if self.w().busy > 0 {
             return;
@@ -765,9 +836,14 @@ impl T {
         // 3.
         for k in 0..16 {
             if self.g8(k, 0x182) != 0 && self.g8(k, 0x183) != 0 && self.g8(k, 0x17E) == 8 {
-                if self.g8(k, 0x1B0) == 0 {
+                let left = self.g8(k, 0x1B0);
+                if left == 0 {
                     self.p8(k, 0x17E, 0);
-                } else {
+                }
+                if crate::fanfix::on(29) {
+                    // #70 F29: 1.15m 0x130C7/0x130C9 writes +0x194 = +0x1B0 (0 too) on both ways.
+                    self.p8(k, 0x194, left);
+                } else if left != 0 {
                     self.p8(k, 0x194, 1);
                 }
                 let id = self.g8(k, 0x17A);
@@ -778,7 +854,15 @@ impl T {
         }
         // 4.
         let v = self.w().interrupter;
-        if v > 7 {
+        if crate::fanfix::on(29) {
+            // #70 F29: 1.15m 0x13103 compares the signed byte; > 7 -> shown slot and interrupter 0x40, return.
+            if v as i8 > 7 {
+                self.w().shown_slot = 0x40;
+                self.w().interrupter = 0x40;
+                return;
+            }
+            self.w().shown_slot = v as i32;
+        } else if v > 7 {
             self.w().shown_slot = 0;
             self.w().interrupter = 0;
         } else {
@@ -790,6 +874,11 @@ impl T {
         self.call(op::FOCUS, &[low as i32, 0]);
         self.w().view_hold = 0;
         let ss = self.w().shown_slot;
+        if crate::fanfix::on(29) {
+            // #70 F29: 1.15m 0x13141 turn_shown 0x92DCA = 1, cave 0x8AF04 = CursorItemBack? before 0x1148C.
+            self.w().turn_shown = 1;
+            self.call(op::CURSOR_BACK, &[]);
+        }
         self.call(op::LOW_AP_STOP, &[ss, 1, 1]);
         self.call(op::MOUSE_REFRESH, &[]);
     }
@@ -990,7 +1079,9 @@ impl Ai {
             }
             let t = self.rd16(0x114) as i16;
             let gassed = t >= 0 && self.tile_byte(t as u16, 5) & 0x80 != 0;
-            if gassed && self.rd8(0x24) != 0x28 {
+            // Fan fix F43 (#70 row 93; 1.15m TurnRest? 0x32D90 -> tail 0x8ADA6): the gas mask needs condition >= 10.
+            let mask = self.rd8(0x24) == 0x28 && (!crate::fanfix::on(43) || self.rd8(0x26) as i8 >= 10);
+            if gassed && !mask {
                 return;
             }
             n * rate
@@ -1550,7 +1641,7 @@ impl T {
     }
     /// StepApCost 0x39B30 of soldier k into tile t.
     fn swap_step_ap(&self, k: usize, t: i32) -> u8 {
-        crate::step_ap(self.a.u_move_code(t), self.g8(k, 0x1A8), self.g8(k, 0x177), self.g8(k, 0x196)) as u8
+        self.a.step_cost(t, self.g8(k, 0x1A8), self.g8(k, 0x177), self.g8(k, 0x196)) as u8
     }
     /// 0x3F8A4 PlaceAt: soldier k stands at view pixel (x, y): its old tile freed, tile = ViewTile(x, y), StopAnim
     /// (k, 1), walk order none, pixel pairs +0x116/+0x118 and +0x126/+0x128 = (x, y), the tile taken, the tile bytes
@@ -1561,12 +1652,24 @@ impl T {
         // SPEC GAP: a pixel pair off the map gives a tile off the map; the port's tile reads give 0 there.
         let t = (y / 14) * 56 + x / 16;
         r.wr16(0x114, t as u16);
-        self.call(op::STOP_ANIM, &[k as i32, 1]);
-        r.wr16(0x120, 0xC41);
-        r.wr16(0x116, x as u16);
-        r.wr16(0x118, y as u16);
-        r.wr16(0x126, x as u16);
-        r.wr16(0x128, y as u16);
+        if crate::fanfix::on(13) {
+            // Fan fix F13 (#70 row 5; changelog 1.15m, found by MitchShudlem, fixed by DarzaR; 1.15m PlaceAt
+            // 0x3F8D0..0x3F908): SnapToTile(k, 1) instead of StopAnim(k, 1), and the merc stands on the centre point
+            // of its new tile (+0x126/+0x128 copied to +0x116/+0x118), not on the raw pixel pair.
+            r.wr16(0x126, super::search::px(t as i32) as u16);
+            r.wr16(0x128, super::search::py(t as i32) as u16);
+            self.call(op::STOP_ANIM, &[k as i32, 1]);
+            r.wr16(0x120, 0xC41);
+            r.wr16(0x116, r.rd16(0x126));
+            r.wr16(0x118, r.rd16(0x128));
+        } else {
+            self.call(op::STOP_ANIM, &[k as i32, 1]);
+            r.wr16(0x120, 0xC41);
+            r.wr16(0x116, x as u16);
+            r.wr16(0x118, y as u16);
+            r.wr16(0x126, x as u16);
+            r.wr16(0x128, y as u16);
+        }
         let t = r.s16_at(0x114);
         r.occupy_for(t, r.rd8(0x17A));
         let w = self.w();

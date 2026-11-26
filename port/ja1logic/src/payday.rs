@@ -199,7 +199,12 @@ impl Pd {
 
     fn dismiss(&self, k: i32, x0: i32) {
         let p = self.sb(k, PROFILE_ID);
-        if self.sb(k, HP) as i8 > 0 {
+        let alive = self.sb(k, HP) as i8 > 0;
+        // Fan fix F63 (#70 row 65): 1.15m PayDayDialog? 0x453C1..0x45456 swaps the two cases: the unpaid live merc
+        // leaves a debt (profile +0x3E = salary, terminations + 1); a dead merc's family gets CorpseGrudge? 0x46548
+        // (as a refused corpse export) and Merc leaves runs with status 0.
+        let fan = crate::fanfix::on(63);
+        if alive {
             unsafe { (*self.w).voice_test = 1 };
             self.call(PD_QUOTE, &[p as i32]);
             if !self.opt_step_text() {
@@ -207,12 +212,19 @@ impl Pd {
                 self.call(MOUSE_SHOW, &[]);
             }
             self.call(PD_BALLOON, &[k, x0]);
-        } else {
+        }
+        if alive == fan {
             let s2 = get16(unsafe { (*self.w).soldiers }, SOLDIERS_LEN, k as i64 * REC as i64 + SALARY2 as i64);
             put16(unsafe { (*self.w).profiles }, PROFILES_LEN, p as i64 * PROFILE + 0x3E, s2);
             self.acc_inc(TERMINATIONS);
         }
-        merc_leaves(self.w, self.h, k, 1);
+        let status = if fan && !alive {
+            super::corpse::corpse_grudge(self.w, self.h, k);
+            0
+        } else {
+            1
+        };
+        merc_leaves(self.w, self.h, k, status);
         self.sb_put(k, IN_CUR_SECTOR, 0);
         self.acc_inc(NON_PAYMENTS);
         self.sb_put(k, PROFILE_ID, 99);

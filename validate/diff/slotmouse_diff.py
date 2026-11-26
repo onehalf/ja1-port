@@ -2,7 +2,9 @@
 """Differential test: the mouse on the merc slots (SlotMouse 0x11714 + its frame in TacticalKeyHandler 0x1463A .. 0x14721,
 and the on-map path 0x14225), original vs port.
 
-usage: .venv/bin/python validate/diff/slotmouse_diff.py [ncases=2000] [DUMP] [--port] [--lib SO]
+usage: .venv/bin/python validate/diff/slotmouse_diff.py [ncases=2000] [DUMP] [--port] [--lib SO] [--fan 61]
+--fan 61 (#70 F61, row 87): the original runs the 1.15m call 0x11B24 -> cave 0x8AF04 (CursorItemBack? 0x53660,
+stubbed and logged as call 28, then SelectMerc?); the port runs with fan fix F61 on.
 A case fuzzes the bytes 0x92DC8, 0x93448, 0x284F11 and Alt, the record fields SlotMouse reads, the mouse point (biased to
 rows, bars, faces, switches and the edges) and the buttons. The original runs in Unicorn with real SlotMouse,
 ClearStripHover, SetSlotView and hit tests, entered mid-function; the stubs log the calls in order and MousePoll reads
@@ -21,18 +23,25 @@ from unicorn.x86_const import UC_X86_REG_ESP  # noqa: E402
 argv = sys.argv[1:]
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
-args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
+args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
+FAN_IDS = sorted(int(x.lstrip("F")) for x in argv[argv.index("--fan") + 1].split(",")) if "--fan" in argv else []
 ncases = int(args[0]) if args else 2000
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
 if not os.path.exists(dump):
     print(f"slotmouse_diff: {dump} missing")
     sys.exit(1)
 PORT = ctypes.CDLL(LIB) if "--port" in argv else None
+if PORT:
+    PORT.ja1_fan_fixes_set.argtypes = [ctypes.c_uint64]
+    PORT.ja1_fan_fixes_set(sum(1 << (k - 1) for k in FAN_IDS))
 
 CONT, HOVER, LAST, OVER, SEL, ALT, MX, MY, MB, SOLD = (0x92DC8, 0x93448, 0x92E58, 0x284F16, 0x284F11, 0x284F20, 0x229D00,
                                                        0x229D04, 0x229CF4, 0x100958)
 e = Emu(dump=dump, fast=True)
 rt = e.rt
+FAN_RUNS = {61: [(0x11B24, 0x11B29)]}
+if FAN_IDS:
+    e.put_115m(only=[r for k in FAN_IDS for r in FAN_RUNS[k]])
 base = e.r32(rt(SOLD))
 st = {}
 
@@ -95,6 +104,7 @@ e.stub(rt(0x15960), lambda em, a, d, b, *_: (log(16, slot_of(a), d & 0xFF, b), s
 e.stub(rt(0x1C608), lambda em, a, d, b, c, *_: log(17, slot_of(a), s32(d), b, s32(c), s32(stack(0)), s32(stack(1)), stack(2) | stack(3)), pop=16)
 e.stub(rt(0x59C14), lambda em, a, d, b, *_: log(18, slot_of(a), s32(d), b))
 e.stub(rt(0x1148C), lambda em, a, d, b, *_: log(19, s32(a), s32(d), b))
+e.stub(rt(0x53660), lambda em, *_: log(28))     # CursorItemBack? (1.15m cave 0x8AF04 only)
 e.stub(rt(0x1CB78), lambda em, *_: log(20))
 e.stub(rt(0x1FC34), lambda em, *_: st["onscr"])
 e.stub(rt(0x682AC), lambda em, a, d, b, c, *_: log(23, s32(a), s32(d), s32(b), s32(c)))
@@ -241,7 +251,7 @@ for case in range(ncases):
         print(f"case {case}: port error {n}")
         sys.exit(1)
     port_log = [tuple(out[i][:{1: 3, 2: 5, 3: 2, 4: 3, 10: 2, 11: 2, 12: 1, 13: 1, 14: 1, 15: 6, 16: 4, 17: 8, 18: 4, 19: 4, 20: 1, 21: 3, 22: 1,
-                               23: 5, 24: 4, 25: 5, 26: 2}.get(out[i][0], 8)]) for i in range(n)]
+                               23: 5, 24: 4, 25: 5, 26: 2, 28: 1}.get(out[i][0], 8)]) for i in range(n)]
     port_state = (state[0], state[1], state[2], state[3])
     port_rec = bytes(rec)
     diffs = []

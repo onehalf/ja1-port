@@ -37,6 +37,17 @@ pub fn mouse_box(view_w: i32, view_h: i32, onscreen: i32) -> (i32, i32, i32, i32
     (left, top, left - 1 + view_w, top - 1 + view_h)
 }
 
+/// Insert #13554 item 1: the Subtitles switch (5) as the text of speech reads it: the world's switch, or on with the
+/// port option subtitles = on (config.rs, JA1_SUBTITLES=1). The switch byte stays as the game set it (saves keep it).
+pub fn subtitles(w: &World) -> bool {
+    sub_byte(w.update.opt_step_text)
+}
+
+/// The same for a copy of the switch byte (0x1163BD).
+pub fn sub_byte(b: u8) -> bool {
+    b != 0 || crate::iteminfo::subtitles()
+}
+
 /// Switch k of the world (0 / 1). Eight switches are world fields, the others stay in the save image.
 pub fn get(w: &World, k: usize) -> u8 {
     match k {

@@ -2,7 +2,9 @@
 front-end (port/ja1front ja1f_click, on the library world) vs the original UseItemAt? 0x1D9B8 with the left or the
 right mouse button down, in Unicorn on mem_fight59.
 
-usage: .venv/bin/python validate/diff/click_diff.py [ncases=3000] [DUMP] [--lib SO]
+usage: .venv/bin/python validate/diff/click_diff.py [ncases=3000] [DUMP] [--lib SO] [--fan 61]
+--fan 61 (#70 F61, row 87): the original runs the 1.15m call 0x1DD83 -> cave 0x8AF04 (CursorItemBack? 0x53660,
+stubbed and recorded as library call 11, then SelectMerc?); the port runs with fan fix F61 on.
 Stubbed in the original: the drawing stubs of hover_diff, the mouse poll 0x678E8 (all buttons up; WaitLeftUp 0x67C54 pops the scripted polls until the left button is up), KeyPressed 0x5616C
 (no key), 0x6782C 0x682AC, TacticalRedraw 0x176C8, 0x5C880, the item info 0x1D950, the banner 0x23B4C, the merc
 sound 0x17B70 (recorded at UseItemAt's 3 sites), ShowMercMessage? 0x299B8; recorded: StatusMessage? 0x27D24, MsgMercText 0x15910, and the library calls
@@ -36,7 +38,8 @@ from unicorn.x86_const import UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_ESP, UC
 argv = sys.argv[1:]
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
-args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] not in ("--lib", "--only"))]
+args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] not in ("--lib", "--only", "--fan"))]
+FAN_IDS = sorted(int(x.lstrip("F")) for x in argv[argv.index("--fan") + 1].split(",")) if "--fan" in argv else []
 ncases = int(args[0]) if args and args[0].isdigit() else 3000
 ONLY = int(argv[argv.index("--only") + 1]) if "--only" in argv else None     # debug: run case N only, verbose
 dump = next((a for a in args if not a.isdigit()), os.path.join(ROOT, "build", "mem_fight59.bin"))
@@ -70,6 +73,8 @@ PORT.ja1f_press_walks.argtypes = [ctypes.POINTER(port_lib.World), ctypes.POINTER
                                   ctypes.POINTER(CursorState), ctypes.POINTER(HoverState), i32, i32]
 PORT.ja1f_press_walks.restype = i32
 EXE = os.path.join(ROOT, "build", "game113b", "JA.EXE").encode()
+PORT.ja1_fan_fixes_set.argtypes = [ctypes.c_uint64]
+PORT.ja1_fan_fixes_set(sum(1 << (k - 1) for k in FAN_IDS))
 
 C = dict(over_map=(0x284F13, "B"), tactical_on=(0x92DCC, "B"), overlay_up=(0x92DCE, "B"), value=(0x284F1D, "B"),
          mode=(0x284F1B, "B"), out_of_range=(0x955C8, "B"), ap_fg=(0x92E5C, "i"), ap_shadow=(0x92E60, "i"),
@@ -87,6 +92,9 @@ e = Emu(dump=dump, fast=True)
 for a in (0x67BF0, 0x331A4, 0x31C98, 0x32EB8, 0x335F8, 0x682AC, 0x176C8, 0x5C880,
           0x1D950, 0x23B4C):
     e.stub(e.rt(a), lambda em, *r: 0)
+FAN_RUNS = {61: [(0x1DD83, 0x1DD88)]}
+if FAN_IDS:
+    e.put_115m(only=[r for k in FAN_IDS for r in FAN_RUNS[k]])
 
 
 def effect_slot(em, eax, edx, ebx, ecx):
@@ -259,6 +267,7 @@ e.stub(e.rt(0x1C514), wait_confirm)
 e.stub(e.rt(0x59C14), lib_stub(1))
 e.stub(e.rt(0x40094), lib_stub(2))
 e.stub(e.rt(0x1148C), lib_stub(3))
+e.stub(e.rt(0x53660), lambda em, *r: calls.append((11,)))     # CursorItemBack? (1.15m cave 0x8AF04 only)
 e.stub(e.rt(0x1C8AA), walk_hook)
 e.stub(e.rt(0x1AA18), lambda em, eax, edx, ebx, ecx: (calls.append((5, slot_of(eax), edx & 0xFF, ebx & 0xFF)), rets[5])[1])
 e.stub(e.rt(0x17F90), lambda em, eax, edx, ebx, ecx: calls.append((6, slot_of(eax), edx & 0xFFFF, ebx & 0xFF, ecx & 0xFF)))
@@ -491,7 +500,7 @@ def port(t, g, ret, pl):
     pcalls = []
     for j in range(min(n.value, 8)):
         row = list(log[8 * j:8 * j + 8])
-        pcalls.append(tuple(row[:{1: 4, 2: 2, 3: 4, 4: 8, 5: 4, 6: 5, 7: 1, 8: 4, 9: 4, 10: 3}[row[0]]]))
+        pcalls.append(tuple(row[:{1: 4, 2: 2, 3: 4, 4: 8, 5: 4, 6: 5, 7: 1, 8: 4, 9: 4, 10: 3, 11: 1}[row[0]]]))
     return rc, c, h, lab, bufs, sc, ops, pcalls, status.value.decode("latin-1"), wait.value
 
 
@@ -550,7 +559,7 @@ for i in range(ncases):
     if ONLY is not None:
         print("occupant", tiles[8 * t + 5] & 0x7F, "calls", olib, pcalls, "texts", otexts, repr(pstat), "wait", pwait)
     for x in pcalls:
-        kn = ("click", "reload", "select", "move", "turn", "anim", "look", "message", "aim right", "ok sound")[x[0] - 1]
+        kn = ("click", "reload", "select", "move", "turn", "anim", "look", "message", "aim right", "ok sound", "cursor back")[x[0] - 1]
         seen[kn] = seen.get(kn, 0) + 1
     if pwait:
         kn = ("aim", "confirm", "walk confirm", "posture")[pwait - 1]
@@ -614,5 +623,5 @@ if same < 5:
     print("click_diff: too few detector clicks", same)
     bad += 1
 print(f"click_diff: {same} detector clicks equal to ja1_click")
-print(f"click_diff: {ncases} cases ({skipped} skipped), {bad} mismatches")
+print(f"click_diff{' --fan ' + ','.join(map(str, FAN_IDS)) if FAN_IDS else ''}: {ncases} cases ({skipped} skipped), {bad} mismatches")
 sys.exit(1 if bad else 0)

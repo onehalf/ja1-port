@@ -25,6 +25,9 @@ import assign_fuzz as fz             # noqa: E402
 argv = sys.argv[1:]
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
+import pfix                          # noqa: E402  #71 --pfix 5: the empty-store press fix on both sides
+PFIX = pfix.parse(argv)
+P05 = PFIX is not None and 5 in PFIX
 args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
 ncases = int(args[0]) if args else 300
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
@@ -61,6 +64,15 @@ def pic(name):
 
 
 e = Emu(dump=dump, fast=True)
+if PFIX is not None:
+
+    class _FrontFixes:                    # the port side is libja1front: its own copy of the fix masks
+        @staticmethod
+        def port_fixes(m):
+            if PORT:
+                PORT.ja1_port_fixes_set.argtypes = [ctypes.c_uint64]
+                PORT.ja1_port_fixes_set(m)
+    pfix.apply(e, PFIX, _FrontFixes)
 
 
 def load(em, eax, edx, ebx, ecx):
@@ -98,12 +110,14 @@ def poll(em, *_):
     st["key"] = st["ev"][j][3] if len(st["ev"][j]) > 3 else 0
     if b == 2 and j >= 2 and e.r32(e.rt(MODE)) == 0 and e.r32(e.rt(CUR)) == 0 and \
             any(29 <= x <= 70 and 59 + 19 * q <= y <= 74 + 19 * q for q in range(4)):
-        st["ev"][j] = NONE_XY + (2,)          # right press on a store place, view 0, no current record (SPEC GAP)
-        st["gaps"] += 1
+        st["gaps"] += 1                       # right press on a store place, view 0, no current record (SPEC GAP)
+        if not P05:                           # with P05 both sides show nothing: compared
+            st["ev"][j] = NONE_XY + (2,)
         x, y, b = st["ev"][j]
     if b == 1 and j >= 2 and store_spec_gap(x, y):
-        st["ev"][j], st["ev"][j + 1] = NONE_XY + (1,), NONE_XY + (0,)
         st["gaps"] += 1
+        if not P05:
+            st["ev"][j], st["ev"][j + 1] = NONE_XY + (1,), NONE_XY + (0,)
         x, y, b = st["ev"][j]
     e.w32(e.rt(MOUSE_X), x)
     e.w32(e.rt(MOUSE_Y), y)
@@ -561,7 +575,7 @@ if PORT and ncases:                           # the stop point (strategic.md): a
             rc = PORT.ja1f_assign_items(ISO, EXE, ps, b"".join(fc), bytes(acc), pco, prec, ctypes.byref(nrec), pp, psc,
                                         px, py, pr, 1, stt, pcur, pswp, plog, ctypes.byref(nlog))
             lg = [(plog[2 * q], plog[2 * q + 1]) for q in range(nlog.value)]
-            if rc or (99, 47) not in lg or pcur.raw != bytes(12) or nrec.value or any(k == 7 for k, _ in lg):
+            if rc or ((99, 47) in lg) != (not P05) or pcur.raw != bytes(12) or nrec.value or any(k == 7 for k, _ in lg):
                 print(f"MISMATCH stop point j {j} {'right' if rb else 'left'}: rc {rc} log {lg} cursor {pcur.raw.hex()}")
                 bad += 1
 if os.environ.get("ITEMS_V"):

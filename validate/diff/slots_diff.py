@@ -23,6 +23,8 @@ import datarc, pcx                   # noqa: E402
 argv = sys.argv[1:]
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
+import pfix                          # noqa: E402  #71 --pfix 7: the name line cursor keys on both sides
+PFIX = pfix.parse(argv)
 args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
 ncases = int(args[0]) if args else 300
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
@@ -40,6 +42,15 @@ LIST, DAYS, NAMES = 0x28E060, 0x28ECE4, 0x28ECF8
 MOUSE_X, MOUSE_Y, BUTTONS = 0x229D00, 0x229D04, 0x229CF4
 
 e = Emu(dump=dump, fast=True)
+if PFIX is not None:
+
+    class _FrontFixes:                    # the port side is libja1front: its own copy of the fix masks
+        @staticmethod
+        def port_fixes(m):
+            if PORT:
+                PORT.ja1_port_fixes_set.argtypes = [ctypes.c_uint64]
+                PORT.ja1_port_fixes_set(m)
+    pfix.apply(e, PFIX, _FrontFixes)
 
 
 def load(em, eax, edx, ebx, ecx):
@@ -247,6 +258,9 @@ for i in range(ncases):
             bad += 1
             if bad > 10:
                 break
+if PFIX is not None and 7 in PFIX and faulted:   # P07 takes 0x7F out of the name: no crash is left
+    print(f"MISMATCH: {faulted} cases crashed the original with P07")
+    bad += faulted
 print(f"slots_diff: {ncases} cases ({ended} ended in the tape, {faulted} skipped: the original faulted), {bad} mismatches" + ("" if PORT else " (original only)"))
 print(f"CASES slots={ncases - faulted}")
 sys.exit(1 if bad else 0)

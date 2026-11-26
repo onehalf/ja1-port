@@ -3,6 +3,9 @@ SightLine 0x58760 in Unicorn.
 
 usage: .venv/bin/python validate/diff/sight_diff.py [n=4000] [DUMP ...] [--mirror]
 --mirror: tools/ai.py sight_line (the analysis mirror) instead of the port.
+--fan IDS (#70, `all` or `F07`): the original side runs the fan patch 1.15m code (Emu.put_115m) and its g_windowTbl
+bytes 0x95B93..0x95B97 (data: put_115m writes code only); the port runs with the fan_fixes mask IDS and the 1.13b
+table bytes in its world (the port's own F07 table patch must give the 1.15m bytes).
 Each case: a looker slot, a start pixel (its own x + 2, y + 4 or another point), a target tile and pixel within 20
 tiles, the old flag, the range and the seen slot (its +0x1B1 / +0x1B3 fuzzed); up to 8 tiles near the line get a
 window (0x37..0x82), brush (0x27..0x36), 0xE2 / 0xE3 or an empty object. LineOfFire 0x580CC (op 42 fire_line) is
@@ -19,20 +22,35 @@ from emu import Emu                  # noqa: E402
 
 SIGHT_LINE, LINE_OF_FIRE, RANDOM = 0x58760, 0x580CC, 0x53538
 OBJ = 1                              # tile byte 1 = object
-nums = [a for a in sys.argv[1:] if a.isdigit()]
+argv = sys.argv[1:]
+FAN = None
+if "--fan" in argv:
+    v = argv.pop(argv.index("--fan") + 1)
+    FAN = (1 << 128) - 1 if v == "all" else sum(1 << (int(x.strip()[1:]) - 1) for x in v.split(","))
+    from le import load              # noqa: E402
+    WIN_AT, WIN_115M, WIN_113B = 0x95B93, load("115m").read(0x95B93, 5), load("113b").read(0x95B93, 5)
+    _wt = load("113b").read(0x95788, 2056)
+    WIN_TALL = [o for o in range(0x37, 0x83) if max(_wt[8 * o:8 * o + 8]) >= 0x62] + [0x81] * 4
+nums = [a for a in argv if a.isdigit()]
 n = int(nums[0]) if nums else 4000
-dumps = [a for a in sys.argv[1:] if not a.isdigit() and not a.startswith("-")] or \
+dumps = [a for a in argv if not a.isdigit() and not a.startswith("-")] or \
     [os.path.join(HERE, "..", "..", "build", f"mem_{k}.bin") for k in ("tac60", "combat1", "death1", "fight20", "a10")]
 dumps = [d for d in dumps if os.path.exists(d)]
 if not dumps:
     raise SystemExit("sight_diff: no dump (build/mem_tac60.bin)")
 MIRROR = "--mirror" in sys.argv
+if FAN is not None and MIRROR:
+    raise SystemExit("sight_diff: --fan tests the port, not the mirror")
+port_lib.fan_fixes(FAN or 0)
 HOST_OPS = port_lib.ALL_OPS & ~(1 << 6)      # direction: the library's own; fire_line: the host (scripted)
 fails = total = blocked = 0
 results = {}
 for di, dump in enumerate(dumps):
     e = Emu(dump=dump, fast=True)
     rt = e.rt
+    if FAN is not None:
+        e.put_115m()
+        e.uc.mem_write(rt(WIN_AT), bytes(WIN_115M))
     rng = random.Random(1000 + di)
     fire, log = [0], []
 
@@ -96,6 +114,8 @@ for di, dump in enumerate(dumps):
             if 0 <= t < 3136:
                 o = rng.choice([rng.randrange(0x37, 0x83), rng.randrange(0x37, 0x83), rng.randrange(0x27, 0x37),
                                 rng.randrange(0x27, 0x37), 0xE2, 0xE3, 0, rng.randrange(256)])
+                if FAN is not None and rng.random() < 0.5:     # F07: the windows that change the step limit
+                    o = rng.choice(WIN_TALL)
                 poke(rt(ai.G_TILEMAP) + 8 * t + OBJ, [o])
         fire[0] = rng.choice([0, 24, 25, 26, 100, -1, rng.randrange(1 << 32)])
         log.clear()
@@ -131,6 +151,8 @@ for di, dump in enumerate(dumps):
                           f"s {s} ({x},{y}) -> T {T} ({tx},{ty}) flag {flag:#x} range {rng_} seen {seen:#x}")
             continue
         bufs, scalars = port_lib.world_load(e, ai)
+        if FAN is not None:
+            bufs["window"][WIN_AT - 0x95788:WIN_AT - 0x95788 + 5] = WIN_113B
 
         def call(op, a):
             a = [v & 0xFFFFFFFF for v in a]
@@ -152,6 +174,7 @@ for di, dump in enumerate(dumps):
             if fails <= 10:
                 print(f"MISMATCH {os.path.basename(dump)} case {i}: original {got} {want_log} port {res} {log} | "
                       f"s {s} ({x},{y}) -> T {T} ({tx},{ty}) flag {flag:#x} range {rng_} seen {seen:#x}")
-print(f"sight_diff: {total} cases on {len(dumps)} dumps (results {dict(sorted(results.items()))}, "
+port_lib.fan_fixes(0)
+print(f"sight_diff{f' --fan {FAN:#x}' if FAN is not None else ''}: {total} cases on {len(dumps)} dumps (results {dict(sorted(results.items()))}, "
       f"{blocked} blocked with fire_line), {fails} mismatches")
 sys.exit(1 if fails else 0)

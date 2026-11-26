@@ -149,6 +149,13 @@ fn rd_balance(w: *mut Ja1World) -> i32 {
     rd(w, BALANCE)
 }
 
+/// CorpseGrudge? 0x46548 (team slot k of a dead merc) for other modules (fan fix F63: an unpaid dead merc's family).
+pub(super) fn corpse_grudge(w: *mut Ja1World, h: *const Ja1Host, k: i32) {
+    if let Some(ai) = Ai::new(w, h, 0) {
+        Ctx { w, h, ai }.grudge(k);
+    }
+}
+
 /// Native leaves (k) for other modules (FIRE: strategic.md "Firing a merc").
 pub(super) fn native_leaves(w: *mut Ja1World, h: *const Ja1Host, k: i32) {
     if let Some(ai) = Ai::new(w, h, 0) {

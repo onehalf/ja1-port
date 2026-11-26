@@ -49,12 +49,17 @@ if STRIP:
                   "wait_up": (0x67C54, "", 0), "wait_rup": (0x67C68, "", 0), "inv_open": (0x54D50, "sb", 0)})
 STRIP_EDGES = [0, 49, 94, 139, 184, 229, 272]
 
-args = [a for a in sys.argv[1:] if not a.startswith("-")]
+import pfix                              # noqa: E402  #71 --pfix IDS: port fixes (pfix.py)
+PFIX = pfix.parse(sys.argv)
+args = [a for i_, a in enumerate(sys.argv[1:], 1) if not a.startswith("-") and sys.argv[i_ - 1] != "--fan"]
 N = int(args[0]) if args and args[0].isdigit() else 400
 dumps = [a for a in args if not a.isdigit()] or [os.path.join(ROOT, "build", f"mem_{d}.bin") for d in DUMPS]
 SEED = int(sys.argv[sys.argv.index("--seed") + 1]) if "--seed" in sys.argv else 1
 VERBOSE = "-v" in sys.argv
 PORT = "--port" in sys.argv
+FAN = [int(x.strip().lstrip("Ff")) for x in sys.argv[sys.argv.index("--fan") + 1].split(",")] if "--fan" in sys.argv else None
+FAN_RUNS = {56: [(0x54A4D, 0x54A4E)]}   # #70 F56: 1.15m UseInventoryItem? pick up counts a mine down only for MineSpotted? > 0
+F56_RNG = random.Random(5656)          # --fan 56: MineSpotted? -1 answers (own stream: the plain cases stay)
 SOL = 0xFA958
 MSG = {7: 0x97887, 8: 0x98F7F, 9: 0x98FF7, 10: 0x9AE05}          # op 125 text number -> the original's string
 SOUNDS = (None, 0x91020, 0x91018, 0x9102C, 0x9100C)              # op 237 sound / text numbers (port_api.md)
@@ -115,6 +120,11 @@ class Case:
 
 def run_dump(path, rng, n):
     e = Emu(dump=path, fast=True)
+    if FAN is not None:                  # original: only these fixes' 1.15m bytes; port: only their mask bits
+        e.put_115m(only=[r_ for f_ in FAN for r_ in FAN_RUNS[f_]])
+        port_lib.fan_fixes(sum(1 << (f_ - 1) for f_ in FAN))
+    if PFIX is not None:                 # original: the asm form of each port fix; port: its P mask bits
+        pfix.apply(e, PFIX, port_lib)
     rt = e.rt
     dd = rt(0x90000) - 0x90000
     sol0 = rt(ai.G_SOLDIERS) if hasattr(ai, "G_SOLDIERS") else rt(0xFA958)
@@ -315,7 +325,7 @@ def run_dump(path, rng, n):
             script = make_script(g2)
             script["select"] = [1] * 6
             c = Case(script, ev)
-        if PORT and not STRIP:
+        if PORT and not STRIP and not (PFIX and 2 in PFIX):   # P02: the fixed original skips the unstack too
             c.events0 = port_safe_events(c.events0, item_pos)
         pre = bytes(e.uc.mem_read(rt(DATA_LO), DATA_HI - DATA_LO))
         redraw = rng.choice([0, 0, 1])
@@ -522,7 +532,8 @@ def make_script(rng):
             "body": [rng.choice([0, 10, 25, 40]) for _ in range(12)],
             "item_info": [rng.choice([0, 0, 1]) for _ in range(8)],
             "item_value": [rng.choice([0, 0, 7, 0x1234]) for _ in range(8)],
-            "mine_spotted": [rng.choice([0, 0, 1]) for _ in range(4)],
+            "mine_spotted": [rng.choice([0, 0, 1]) if not (FAN and 56 in FAN and F56_RNG.random() < 0.4) else 0xFF
+                             for _ in range(4)],
             "disarm": [rng.choice([1, 1, 0, -1 & 0xFFFFFFFF]) for _ in range(4)],
             "w_682ac": [rng.randrange(5) for _ in range(2)]} if r() < 2 else {}
 

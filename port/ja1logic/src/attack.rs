@@ -122,19 +122,22 @@ impl Ai {
         let q = self.cdiv(d * 50, s16(self.range(t) * 15));
         // 3.
         let base = (self.b5(t) * (100 - s16(q) + c as i32 / 4) / 100) as u8 as i32;
-        // 4.
+        // 4. Fan fix F43 (#70 row 93; 1.15m ExpectedDamage 0x72151 / 0x72181 / 0x721B6 -> tails 0x8ADDE /
+        // 0x8AE03 / 0x8AE4F): helmet, item 0x31 and body armour count only at condition >= 9 (signed bytes).
+        let worn = crate::fanfix::on(43);
+        let ok = |at: usize| !worn || self.s8r(o, at + 2) >= 9;
         let mut helm = 0;
         let ht = self.rd8_of(o, HELMET);
-        if ht != 0 {
+        if ht != 0 && ok(HELMET) {
             helm = (self.s8r(o, HELMET + 2) * self.absorb(ht as usize + 15) / 100) as u8 as i32;
         }
         // 5.
         let mut body = 0;
-        if self.rd8_of(o, VEST_POCKET) == 0x31 {
+        if self.rd8_of(o, VEST_POCKET) == 0x31 && ok(VEST_POCKET) {
             body = (body + self.s8r(o, VEST_POCKET + 2) * self.absorb(0x31) / 100) as u8 as i32;
         }
         let bt = self.rd8_of(o, BODY_ARMOUR);
-        if bt != 0 {
+        if bt != 0 && ok(BODY_ARMOUR) {
             body = (body + self.s8r(o, BODY_ARMOUR + 2) * self.absorb(bt as usize) / 100) as u8 as i32;
         }
         // 6.
@@ -236,7 +239,10 @@ impl Ai {
         }
         let (h, mh) = (self.s8r(r, f::HP), self.s8r(r, f::HP_MAX));
         if h < mh {
-            let lost = ((self.u8r(r, f::HP_MAX) - self.u8r(r, f::HP) - self.u8r(r, WOUNDS)) as u8 as i32) / 2 + mh - h;
+            let half = ((self.u8r(r, f::HP_MAX) - self.u8r(r, f::HP) - self.u8r(r, WOUNDS)) as u8 as i32) / 2;
+            // Fan fix F06 (#70 row 88, switch HEALTHY): bandages lower the loss (1.15m 0x56B66 -> 0x3C007 for the
+            // attacker, 0x56C4C -> 0x3C025 for the defender).
+            let lost = if crate::fanfix::on(6) { mh - h - half } else { half + mh - h };
             // s8 maxHealth × 3 can be 0: div_zero (op 47), quotient 0.
             v = s16(v - self.cdiv(v * 2 * lost, mh * 3));
         }
@@ -279,12 +285,15 @@ impl Ai {
         // 4.
         b = (self.s8r(me, f::ITEMS + 2) * b as i8 as i32 / 100) as u8;
         // 5.
+        // Fan fix F43 (#70 row 93; 1.15m KnifeDamage 0x7246E / 0x7249C -> tails 0x8AE16 / 0x8AE61): item 0x31 and
+        // body armour count only at condition >= 9 (signed bytes).
         if !sneak {
-            if self.rd8_of(o, VEST_POCKET) == 0x31 {
+            let ok = |at: usize| !crate::fanfix::on(43) || self.s8r(o, at + 2) >= 9;
+            if self.rd8_of(o, VEST_POCKET) == 0x31 && ok(VEST_POCKET) {
                 b = (b as i8 as i32 - self.s8r(o, VEST_POCKET + 2) * self.absorb(0x31) / 100) as u8;
             }
             let bt = self.rd8_of(o, BODY_ARMOUR);
-            if bt != 0 {
+            if bt != 0 && ok(BODY_ARMOUR) {
                 b = (b as i8 as i32 - self.absorb(bt as usize) * self.s8r(o, BODY_ARMOUR + 2) / 100) as u8;
             }
         }
@@ -387,13 +396,15 @@ impl Ai {
             0x16 => (0, if self.ground(t) == 3 { 75 } else { 37 }),
             _ => (0, 0),
         };
-        // 2.
+        // 2. Fan fix F43 (#70 row 93; 1.15m ThrowDamage 0x722AE -> tail 0x8ADF0, 0x722DE -> 0x8AE3A, 0x7231D ->
+        // 0x8AD6D): item 0x31 and the body armour need condition >= 9, the gas mask >= 10 (signed bytes).
+        let worn = crate::fanfix::on(43);
         if blast != 0 {
-            if self.rd8_of(o, VEST_POCKET) == 0x31 {
+            if self.rd8_of(o, VEST_POCKET) == 0x31 && (!worn || self.s8r(o, VEST_POCKET + 2) >= 9) {
                 blast = (blast as i8 as i32 - self.absorb(0x31) * self.s8r(o, VEST_POCKET + 2) / 100) as u8;
             }
             let bt = self.rd8_of(o, BODY_ARMOUR);
-            if bt != 0 {
+            if bt != 0 && (!worn || self.s8r(o, BODY_ARMOUR + 2) >= 9) {
                 blast = (blast as i8 as i32 - self.s8r(o, BODY_ARMOUR + 2) * self.absorb(bt as usize) / 100) as u8;
             }
             if (blast as i8) < 1 {
@@ -401,7 +412,7 @@ impl Ai {
             }
         }
         // 3.
-        if gas != 0 && self.rd8_of(o, ITEM3) == 0x28 {
+        if gas != 0 && self.rd8_of(o, ITEM3) == 0x28 && (!worn || self.s8r(o, ITEM3 + 2) >= 10) {
             gas = ((100 - self.s8r(o, ITEM3 + 2)) * gas as i8 as i32 / 100) as u8;
         }
         // 4.
@@ -433,6 +444,11 @@ impl Ai {
 
     // ================= Throw chance =================
     pub(super) fn throw_chance(&self, t: i32, k: u8) -> i32 {
+        self.throw_chance_far(t, k).0
+    }
+    /// Throw chance and the 1.15m "too far" flag: true when the distance is more than reach + 16 (1.15m ThrowChance
+    /// leaves ebp = 15 - (d - reach) and `inc ebp` sets SF, which ThrowOption 0x71C68 tests; fan fix F58).
+    pub(super) fn throw_chance_far(&self, t: i32, k: u8) -> (i32, bool) {
         let me = self.s;
         let t = s16(t);
         // 1.
@@ -443,13 +459,19 @@ impl Ai {
         if k != 0 {
             v += k as i32 * 10;
         }
+        // Fan fix F42 (#70 row 89; 1.15m 0x58BFE -> tail 0x8AE8E): a merc being bandaged (+0x1B9 = 4) gets the
+        // same -20 as in ChanceToHit / MeleeChance, lower limit 1 (1.13b: no throw penalty).
+        if crate::fanfix::on(42) && self.rd8(B1B9) == 4 {
+            v = (v - 20).max(1);
+        }
         if me >= 0x28 {
             // Difficulty above 2 uses +10 (as the melee hit chance).
             v += match self.w_difficulty() { 0 => -10, 1 => 0, _ => 10 };
         }
         // 2.
         let mut d = s16(world_dist(self.s16r(me, f::X2), self.s16r(me, f::Y2), px(t), py(t)));
-        if self.rd8(ITEM3) == 0x27 {
+        // Fan fix F43 (#70 row 93; 1.15m 0x58C50 -> tail 0x8AD3A): sun goggles need condition >= 10.
+        if self.rd8(ITEM3) == 0x27 && (!crate::fanfix::on(43) || self.rd8(ITEM3 + 2) as i8 >= 10) {
             d -= d / 10;
         }
         // 3.
@@ -458,12 +480,15 @@ impl Ai {
         reach = (reach - (100 - e) * reach / 200).max(0);
         // 4.
         v += reach / 2 - d;
+        let far = d - reach > 16;
         if d > reach {
             v /= 2;
         }
         // 5.
         if h < mh {
-            let lost = ((self.u8r(me, f::HP_MAX) - self.u8r(me, f::HP) - self.u8r(me, WOUNDS)) as u8 as i32) / 2 + (mh - h);
+            let half = ((self.u8r(me, f::HP_MAX) - self.u8r(me, f::HP) - self.u8r(me, WOUNDS)) as u8 as i32) / 2;
+            // Fan fix F06 (#70 row 88, switch HEALTHY; 1.15m 0x58D2F -> 0x3BFED): bandages lower the loss.
+            let lost = if crate::fanfix::on(6) { (mh - h) - half } else { half + (mh - h) };
             let q = self.cdiv(v * 2 * lost, mh * 3) as u8 as i32;
             v -= (100 - (self.s8(LEVEL) - 1) * 10) * q / 100;
         }
@@ -473,7 +498,7 @@ impl Ai {
             v -= (100 - (self.s8(DEXTERITY) - 10)) * q / 100;
         }
         // 7.
-        v.clamp(1, 99)
+        (v.clamp(1, 99), far)
     }
 
     // ================= Throw option (op 25) =================
@@ -540,7 +565,10 @@ impl Ai {
                     let top = (ap - cost).min(4);
                     let mut a = 0;
                     while a <= top {
-                        let ch = (self.throw_chance(c, a as u8) as u8) as i32;
+                        let (ch, far) = self.throw_chance_far(c, a as u8);
+                        // Fan fix F58 (#70 row 37; 1.15m ThrowOption 0x71C68): a target more than 16 past the
+                        // throw reach counts as chance 0.
+                        let ch = if far && crate::fanfix::on(58) { 0 } else { (ch as u8) as i32 };
                         let ch = ((ch + ch / 2) as u8 as i32).min(100);
                         let v = s16(self.cdiv(ap * ch, tac + a));
                         if v > best {
@@ -687,6 +715,24 @@ impl Ai {
         }
         b
     }
+}
+
+/// MeleeChance 0x56A78 of attacker `slot` on record `defender` with aim `aim` (u8 1..99, 0 without a knife or
+/// fist item). Used by the KnifeOption / melee paths inside the library; the C entry is for the fan fix test
+/// (fanfix_diff.py melee, #70 F06). A defender outside 0..47 gives 0.
+#[no_mangle]
+pub extern "C" fn ja1_melee_chance(w: *mut Ja1World, h: *const Ja1Host, slot: i32, defender: i32, aim: i32) -> i32 {
+    if !(0..48).contains(&defender) {
+        return 0;
+    }
+    run(w, h, slot, 0, |a| a.melee_hit_chance(defender as usize, aim as u8))
+}
+
+/// ThrowChance 0x58BB0 of `slot` at tile `tile` with aim `aim` (1..99). Used inside the library (ThrowOption, the
+/// throw); the C entry is for the fan fix test (fanfix_diff.py throw, #70 F06).
+#[no_mangle]
+pub extern "C" fn ja1_throw_chance(w: *mut Ja1World, h: *const Ja1Host, slot: i32, tile: i32, aim: i32) -> i32 {
+    run(w, h, slot, 0, |a| a.throw_chance(tile, aim as u8))
 }
 
 // SPEC GAP: on a null world / host or a slot outside 0..47 the result is 0 (no host call).

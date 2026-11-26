@@ -62,6 +62,7 @@ impl Ai {
 
     // ---- Take damage (op 110) ----
     pub(super) fn take_damage(&self, height: i32, damage: i32, k: u8, a: u8, tile: u16) {
+        let mut k = k;
         let slot = self.slot();
         let mut d = damage;
         let cur = self.cur_anim();
@@ -212,9 +213,16 @@ impl Ai {
             if k == 1 {
                 // a.
                 if unsafe { (*self.w).knockdown } != 0 && self.s8(0x183) >= 15 {
+                    // Fan fix F11 (#70 row 3; changelog 1.15m, found by MitchShudlem, fixed by DarzaR; 1.15m TakeDamage
+                    // 0x3996B): ReplaceSoldier first, so a crouching merc knocked down by a leg hit falls at once.
+                    if crate::fanfix::on(11) {
+                        self.call(op::REPLACE, &[slot]);
+                    }
                     self.call(op::KNOCKDOWN_ANIM, &[slot, 0x28, 0x2B, 4]);
                     extra = 4;
-                    unsafe { (*self.w).knockdown = 0 };
+                    if !crate::fanfix::on(10) {
+                        unsafe { (*self.w).knockdown = 0 };
+                    }
                 } else {
                     if self.s8(0x183) < 15 && a < 0x40 {
                         let ai = a as usize;
@@ -230,24 +238,38 @@ impl Ai {
                 self.wr8(0x195, 0);
             } else {
                 // c.
+                // Fan fix F08 (#70 row 2; changelog 1.15m, found by MitchShudlem, fixed by DarzaR; 1.15m TakeDamage
+                // 0x39A2F..0x39A5D + 0x39A8B): a blast (k 4) of 5 or less damage off the merc's tile turns into
+                // k 7, so the fall check below runs (k >= 6 there) and a merc left at 0 health falls; the end of a
+                // task then follows the 0x2C / 0x2A pictures for any damage >= 0 instead of damage > 5.
+                let small = !(d > 0x28 || tile == self.rd16(0x114) || d > 5);
                 if d > 0x28 || tile == self.rd16(0x114) {
                     self.d_anim(0x2C, 0);
                 } else if d > 5 {
                     self.d_anim(0x2A, 0);
                 } else {
                     self.wr8(0x195, 0);
+                    if k == 4 && crate::fanfix::on(8) {
+                        k = 7;
+                    }
                 }
                 extra = 4;
-                if d > 5 && self.rd8(0x1B9) != 0 {
+                let end = if crate::fanfix::on(8) { !small && d >= 0 } else { d > 5 };
+                if end && self.rd8(0x1B9) != 0 {
                     self.call(op::END_TASK, &[slot, 0]);
                 }
             }
             // d.
             // SPEC GAP: the spec reads as if the fall check (anim 0x2B) ran for every k; the original runs it only
             // when k = 3 or k = 6 (inside the hk = 3 condition).
-            if k == 3 || k == 6 {
+            let fall_k = if crate::fanfix::on(8) { k as i8 >= 6 } else { k == 6 };
+            if k == 3 || fall_k {
                 hk = 3;
-                if self.rd8(0x183) == 0 && self.cur_anim() >= 4 || k == 6 && d == 1 {
+                // Fan fix F09 (#70 row 24; changelog 1.15z, found by DarzaR; 1.15m TakeDamage 0x39A9B): the fall
+                // picture comes below 15 health, not only at 0, so a merc who collapses from bleeding (Bleed? passes
+                // k 3) falls.
+                let down = if crate::fanfix::on(9) { self.s8(0x183) < 15 } else { self.rd8(0x183) == 0 };
+                if down && self.cur_anim() >= 4 || k == 6 && d == 1 {
                     self.d_anim(0x2B, 1);
                     if self.rd8(0x1B9) != 0 {
                         self.call(op::END_TASK, &[slot, 0]);
@@ -256,6 +278,12 @@ impl Ai {
             }
         }
         // 10.
+        // Fan fix F10 (#70 row 82; changelog 1.15l, found by DarzaR; 1.15m TakeDamage 0x3974D + 0x3998A): the knock-down
+        // flag that a leg hit sets is cleared here on every way out, not only after the knock-down picture, so a flag
+        // left by a hit that did not knock its target down no longer drops the next merc that takes a bullet.
+        if crate::fanfix::on(10) {
+            unsafe { (*self.w).knockdown = 0 };
+        }
         if k != 3 {
             self.call(op::EFFECT_SLOT, &[slot, hk]);
         }
@@ -401,7 +429,7 @@ impl Ai {
         let b = self.rd8_of(i, 0x17A) as usize;
         // 1.
         let ok = |r: usize| self.rd8_of(r, 0x182) != 0 && self.rd8_of(r, 0x138) != 0 && self.rd8_of(r, 0x183) != 0;
-        if !(slot < 0x30 && b < 0x30 && ok(slot) && ok(i) && (slot < 0x28) != (b < 0x28) && self.s8(0xBA) != 2) {
+        if !(slot < 0x30 && b < 0x30 && ok(slot) && self.sg_opp_in_play(i) && (slot < 0x28) != (b < 0x28) && self.s8(0xBA) != 2) {
             return;
         }
         // 2.
@@ -486,6 +514,10 @@ impl Ai {
     }
 
     // ---- Hit location (op 180) ----
+    /// Fan fix F43 (#70 row 93): with the fix on, the entry at `at` works only at condition (byte at + 2) >= 9.
+    fn worn_ok(&self, at: usize) -> bool {
+        !crate::fanfix::on(43) || self.rd8(at + 2) as i8 >= 9
+    }
     /// Armour piece: entry e, absorb byte offsets a_off / w_off; the amount absorbed (d is reduced).
     fn armour_piece(&self, e: usize, helmet: bool, r: i32, d: &mut i32) -> i32 {
         let t = self.rd8(12 * e) as i64;
@@ -548,8 +580,10 @@ impl Ai {
         }
         if height >= 5000 {
             // 7. Head.
+            // Fan fix F43 (#70 row 93; 1.15m HitLocationDamage 0x38DF9 / 0x38FA9 / 0x39031 -> tails 0x8ADCC /
+            // 0x8ADF0 / 0x8AE29): helmet, item 0x31 and body armour stop a hit only at condition >= 9 (signed).
             let mut a = 0;
-            if self.rd8(0x18) != 0 {
+            if self.rd8(0x18) != 0 && self.worn_ok(0x18) {
                 a = self.armour_piece(2, true, r, &mut d);
             }
             if a == 0 {
@@ -562,10 +596,10 @@ impl Ai {
         } else if height >= 2500 {
             // 8. Torso.
             let mut total = 0;
-            if self.rd8(0x48) == 0x31 {
+            if self.rd8(0x48) == 0x31 && self.worn_ok(0x48) {
                 total += self.armour_piece(6, false, r, &mut d);
             }
-            if self.rd8(0x3C) != 0 {
+            if self.rd8(0x3C) != 0 && self.worn_ok(0x3C) {
                 total += self.armour_piece(5, false, r, &mut d);
             }
             if total == 0 {

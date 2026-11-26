@@ -30,9 +30,9 @@ jobs:
       - run: scripts/build-release.sh windows
       - name: Start test (no game files, no display -> the message and exit code 1)
         run: |
-          mkdir -p build/empty && cp build/target-linux/release/ja1front build/empty/
+          mkdir -p build/empty && cp build/target-linux/release/ja1-port build/empty/
           cd build/empty && set +e
-          ./ja1front --menu 2> err.txt; rc=$?
+          ./ja1-port --menu 2> err.txt; rc=$?
           cat err.txt; test $rc -eq 1 && grep -q "No Jagged Alliance game files found" err.txt
       - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - uses: softprops/action-gh-release@v2

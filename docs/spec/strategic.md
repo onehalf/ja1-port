@@ -2793,7 +2793,9 @@ voice flag 0, mouse-back flag 1. Its result is not used: a picture item stays on
 drawn again. Evidence (asm 2026-10-28): AimScreen 0x20CF2 .. 0x20E2B (view byte 0x93D9F = 0, buttons 0x229CF4 bit 1
 or 0, MouseInRect? 0x67C0C (x, y, x + 0x2A, y + 0x24), FaceEyeFrame 0x27D64 (0, 1), item table 0x94DF8 + 12 t,
 TeamHasProfile? 0x50AC0 then 0x50B04, 0x25D20 (P, t, n, 20; pushes 1, 0, 0)); the branch is reached only when the
-mouse is off the face rect (0x202FF).
+mouse is off the face rect (0x202FF). ORIGINAL BUG (#2 row 65): the eye frame goes to the screen also when the face is
+dark (DECEASED, or the stamp 0x3C of a merc on the team or on assignment), so the open eyes show as a light band over
+the stamp; port fix P23 draws no eye frame on a dark face.
 
 Evidence (2026-10-25): AimScreen 0x2011C (interview table copy 0x1FDB0, opening randoms, key table, face rect
 0x67C0C(9, 0x15, 0x40, 0x46), tooltip 0x23264 texts 0x9A57D.., team loop, mode switch byte 0x95F6C, exit block),

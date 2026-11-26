@@ -1,6 +1,9 @@
 """Differential test: tools/payday.py (the "not enough funds" dialog) vs PayDayDialog? 0x45100 in Unicorn.
 
-usage: .venv/bin/python validate/diff/payday_diff.py [N=400] [DUMP ...] [--seed S] [-v] [--port]
+usage: .venv/bin/python validate/diff/payday_diff.py [N=400] [DUMP ...] [--seed S] [-v] [--port] [--fan 63]
+--fan 63 (#70 F63, row 65; needs --port): the original runs the 1.15m PayDayDialog? bytes 0x453C1..0x45458 (an unpaid
+live merc leaves a debt, a dead merc's family gets CorpseGrudge? 0x46548), the port fan fix F63. Random 0x53538 is
+stubbed on the original side and gives both sides the same scripted numbers (logged as calls).
 --port: the clean-room library (ja1_payday_dialog, port_lib) instead of the mirror; its host ops (port_api.md, ops
 221, 145, 224, 226, 233, 234, 246, 263..280) are mapped back to the original's calls below (PORT_OPS / port_call).
 Each case fuzzes the team (1..8 mercs, native guides, dead mercs, salaries, items), the balance and the day accounts,
@@ -19,6 +22,7 @@ import payday as pd                  # noqa: E402
 from emu import Emu, EmuStop         # noqa: E402
 from unicorn.x86_const import UC_X86_REG_ESP   # noqa: E402
 PORT = "--port" in sys.argv
+FAN = "--fan" in sys.argv
 if PORT:
     import port_lib                  # noqa: E402
     port_lib.INVENTORY = True        # mouse_x / mouse_y / mouse_buttons / tip_item / voice_test
@@ -39,7 +43,7 @@ STUBS = {"show": (0x673AC, "", 0), "hide": (0x67BF0, "", 0), "cursor2": (0x67478
          "w_21b3c": (0x21B3C, "", 0)}
 POLL = 0x678E8
 
-args = [a for a in sys.argv[1:] if not a.startswith("-")]
+args = [a for i, a in enumerate(sys.argv[1:]) if not a.startswith("-") and sys.argv[i] != "--fan"]
 N = int(args[0]) if args and args[0].isdigit() else 400
 dumps = [a for a in args if not a.isdigit()] or [os.path.join(ROOT, "build", f"mem_{d}.bin") for d in DUMPS]
 SEED = int(sys.argv[sys.argv.index("--seed") + 1]) if "--seed" in sys.argv else 1
@@ -125,6 +129,15 @@ def run_dump(path, rng, n):
             emu.uc.emu_stop()
 
     e.stub(rt(POLL), orig_poll)
+    if FAN:
+        port_lib.fan_fixes(1 << 62)
+        e.put_115m(only=[(0x453C1, 0x45458)])
+
+        def orig_random(emu, eax, *_):
+            n = ai._i32(eax & 0xFFFFFFFF)
+            case[0].log.append(("random", (n,)))
+            return case[0].take("random") % n if n > 0 else 0
+        e.stub(rt(0x53538), orig_random)
     for name, (addr, kinds, pop) in STUBS.items():
         e.stub(rt(addr), make_stub(name, kinds), pop)
 
@@ -228,7 +241,10 @@ def run_dump(path, rng, n):
             return port_call(op, list(a), bufs) & 0xFFFFFFFF, None
 
         def rnd(n_):
-            raise SystemExit("payday_diff --port: the library asked for a random number")
+            if not FAN:
+                raise SystemExit("payday_diff --port: the library asked for a random number")
+            case[0].log.append(("random", (n_,)))
+            return case[0].take("random") % n_ if n_ > 0 else 0
         r = port_lib.sector_run("payday_dialog", bufs, scalars, [], rnd, call, sync=True)
         port_lib.world_store(e, ai, bufs, scalars)
         return "script end" if ended and r == 1 else "returned" if r == 0 and not ended else f"result {r}"
@@ -321,7 +337,8 @@ def fuzz(w, rng):
 def make_script(rng):
     return {"yes_no": [rng.choice([1, 1, 0, 0x100]) for _ in range(12)],
             "elapsed": [rng.choice([0, 100, 201, 200, 5000, -1 & 0xFFFFFFFF]) for _ in range(30)],
-            "stash_put": [rng.choice([1, 1, 0]) for _ in range(60)]}
+            "stash_put": [rng.choice([1, 1, 0]) for _ in range(60)],
+            "random": [rng.randrange(1 << 15) for _ in range(40)] if FAN else []}
 
 
 def make_events(rng):
@@ -349,7 +366,10 @@ def main():
         total += per
     if VERBOSE:
         print(" ".join(f"{k}:{v}" for k, v in sorted(COVER.items())))
-    print(f"payday_diff{' --port' if PORT else ''}: {total} cases on {len(dumps)} dumps, {fails} mismatches")
+    if FAN:
+        print(f"payday_diff --fan 63: {COVER['random']} cases ran CorpseGrudge? (an unpaid dead merc)")
+        fails += COVER["random"] == 0
+    print(f"payday_diff{' --port' if PORT else ''}{' --fan 63' if FAN else ''}: {total} cases on {len(dumps)} dumps, {fails} mismatches")
     sys.exit(1 if fails else 0)
 
 

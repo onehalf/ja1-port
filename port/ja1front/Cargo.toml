@@ -8,7 +8,7 @@ license = "GPL-3.0-only"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "ja1front"
+name = "ja1-port"
 path = "src/main.rs"
 
 [features]

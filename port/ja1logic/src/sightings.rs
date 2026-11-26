@@ -25,6 +25,14 @@ impl Ai {
     fn sg_in_play(&self, r: usize) -> bool {
         self.rd8_of(r, 0x182) != 0 && self.rd8_of(r, 0x138) != 0 && self.rd8_of(r, 0x183) != 0
     }
+    /// The opponent test of Sight check / Mark seen / Guard turned. F17 (fan fix, #70 row 9; changelog 1.15z, found
+    /// by DarzaR): an opponent at 0 health that is still down (+0x186 > 0, not yet dead = 0xFF) also counts (1.15m
+    /// SightCheck 0x72FCD, MarkSeen 0x73360, 0x7351C).
+    pub(super) fn sg_opp_in_play(&self, r: usize) -> bool {
+        self.rd8_of(r, 0x182) != 0
+            && self.rd8_of(r, 0x138) != 0
+            && (self.rd8_of(r, 0x183) != 0 || (crate::fanfix::on(17) && self.rd8_of(r, 0x186) as i8 > 0))
+    }
     fn sg_wr8_of(&self, r: usize, off: usize, v: u8) {
         if let Some(o) = Ai::new(self.w, self.h, r as i32) {
             o.wr8(off, v);
@@ -50,7 +58,7 @@ impl Ai {
         if slot >= 0x30 || b >= 0x30 {
             return 0;
         }
-        if !(self.sg_in_play(self.s) && self.sg_in_play(i) && (slot < 0x28) != (b < 0x28) && self.s8(0xBA) != 2) {
+        if !(self.sg_in_play(self.s) && self.sg_opp_in_play(i) && (slot < 0x28) != (b < 0x28) && self.s8(0xBA) != 2) {
             return 0;
         }
         let anim = 0x1E8 + 2 * self.rd8(0x1F3) as usize;
@@ -291,7 +299,7 @@ impl Ai {
     }
     pub(super) fn guard_turned(&self) {
         for i in 0x28..0x30usize {
-            if self.sg_in_play(i) {
+            if self.sg_opp_in_play(i) {
                 self.call(op::SIGHT_CHECK, &[self.slot(), i as i32]);
             }
         }

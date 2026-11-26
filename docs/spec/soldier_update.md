@@ -770,7 +770,7 @@ sum = 0. "New turn" below = sum = sum + low byte of host op 134 new_turn (0) (8-
    - turn_tick = 10.
 2. row = the 9 bytes of `sector_state` for cur_sector.
    - If row byte 1 (enemies) ≠ 0:
-     - If combat = 0 and row byte 2 (mercs here) ≠ 0 (**combat starts**): combat = 1; host op 147 mouse_save ();
+     - If combat = 0 and row byte 2 (mercs here) ≠ 0 (**combat starts**): Time compression (0) (turns.md; 0x10986); combat = 1; host op 147 mouse_save ();
        if merc_to_show ≥ 8 (unsigned): merc_to_show = low byte of First merc (); New turn; host op 208 strip (1
        if opt_onscreen < 3 (unsigned) else 0, 1); turn_shown = 1.
      - Else, if redraw_pending ≠ 0: New turn.

@@ -1374,7 +1374,7 @@ impl MapUi {
             Some(a) => {
                 self.box_up = Some(MsgBox { saved: Vec::new(), text: String::new(), since: std::time::Instant::now(),
                                             pressed: 0, ms: 25_000, again: Some(a) });
-                self.warp = question::prompt_warp(crate::ctlpanel::get(w, 5) != 0, self.mouse);
+                self.warp = question::prompt_warp(crate::ctlpanel::subtitles(w), self.mouse);
                 self.draw_box()?;
                 Ok(Key::Changed)
             }
@@ -1759,7 +1759,7 @@ impl MapUi {
     fn fire_question_open(&mut self, w: &World, k: usize) {
         self.fire_ask = Some(k);
         self.assign_screen = Some(self.img.clone());
-        self.warp = question::prompt_warp(crate::ctlpanel::get(w, 5) != 0, self.mouse);
+        self.warp = question::prompt_warp(crate::ctlpanel::subtitles(w), self.mouse);
     }
 
     /// One input poll of the open duty menu with the mouse and the buttons as they are now.
@@ -2342,7 +2342,9 @@ impl MapUi {
         if let (true, Some((t0, voice))) = (self.box_up.is_some(), self.remark_box) {
             self.remark_box = None;
             crate::sound::screen(|s| s.speech_resume());
-            let left = voice.saturating_sub(t0.elapsed().min(crate::sound::STREAM_BUFFER_TIME));
+            // the voice played one buffer under the box; with port fix P12 it played all the box time
+            let played = if ja1logic::fanfix::port_on(12) { t0.elapsed() } else { t0.elapsed().min(crate::sound::STREAM_BUFFER_TIME) };
+            let left = voice.saturating_sub(played);
             eprintln!("assign sound tail {}", left.as_millis());
             self.sound_until = Some(std::time::Instant::now() + left);
         }

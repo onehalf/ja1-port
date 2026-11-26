@@ -18,7 +18,7 @@ ROOT = os.path.join(HERE, "..", "..")
 sys.path[:0] = [HERE, os.path.join(ROOT, "tools")]
 from emu import Emu                  # noqa: E402
 
-FRONT = os.path.join(ROOT, "port/ja1front/target/release/ja1front")
+FRONT = os.path.join(ROOT, "port/ja1front/target/release/ja1-port")
 ISO, EXE = os.path.join(ROOT, "rom/JA1.gog"), os.path.join(ROOT, "build/game113b/JA.EXE")
 CB, FILM, TAB, NAMES, I, J, RATE, VOL, SCREEN = (0x5BE18, 0x28EF44, 0xA5448, 0xA5510, 0x1163B4, 0x1163B0, 0x96370,
                                                 0x337948, 0x95678)

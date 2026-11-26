@@ -254,7 +254,11 @@ impl Ai {
         self.wr8(0x1A5, 0);
         self.wr16(0x10C, 10000);
         if slot < 8 {
-            // 3.
+            // 3. Not quiet with a view mode (0x92DDF != 0): TacticalRedraw(1) 0x3A52C, whose DrawProjectilePass?
+            // runs the effect records (#70 row 30: in 1.13b the record of the blast that kills the merc hits again).
+            if quiet == 0 && unsafe { (*self.w).opt_onscreen } != 0 {
+                self.call(op::EFFECT_PASS, &[0x13]);
+            }
             self.call(op::DEATH_SHOW, &[slot, quiet]);
             if self.ss_get(9 * self.w_cur_sector() as i64 + 2) == 0 {
                 unsafe { (*self.w).squad_lost = 1 };

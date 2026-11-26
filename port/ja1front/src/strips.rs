@@ -116,14 +116,20 @@ pub fn shade_last() -> i32 {
 /// StopWalk 0x104C8 (op 72, slot, flag): only a merc's record, the selected one, in a fight. Flag != 0 and no busy
 /// display: view_hold 0x92DCE = 1, turn_shown 0x92DCA = 0 (the turn cannot end), button 0 gets its shade 0x254F0 (`shade_of`).
 /// Flag 0 and a busy display: 0x10310 (button 0 up with its label, turn_shown = 1), view_hold = 0.
-pub fn stop_walk(slot: u8, flag: u8, combat: u8, selected: u8, view_hold: &mut u8, turn_shown: &mut u8) {
-    if slot >= 8 || combat == 0 || slot != selected {
+/// Fan fix F14 (#70 row 8; changelog 1.15z, found by DarzaR; 1.15m StopWalk 0x104D7 + 0x1053A): flag > 0 (signed
+/// byte) turns the display on, flag <= 0 off, and flag -1 (the whole register, from WalkEnd) turns it off for any merc,
+/// not only the selected one.
+pub fn stop_walk(slot: u8, flag: i32, combat: u8, selected: u8, view_hold: &mut u8, turn_shown: &mut u8) {
+    let fan = ja1logic::fanfix::on(14);
+    let any = fan && flag == -1;
+    if slot >= 8 || combat == 0 || (slot != selected && !any) {
         return;
     }
-    if flag != 0 && *view_hold == 0 {
+    let on = if fan { (flag as u8 as i8) > 0 } else { flag as u8 != 0 };
+    if on && *view_hold == 0 {
         *view_hold = 1;
         *turn_shown = 0;
-    } else if flag == 0 && *view_hold != 0 {
+    } else if !on && *view_hold != 0 {
         *view_hold = 0;
         *turn_shown = 1;
     }

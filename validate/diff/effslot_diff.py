@@ -13,7 +13,7 @@ ROOT = os.path.join(HERE, "..", "..")
 sys.path[:0] = [HERE, os.path.join(ROOT, "tools")]
 from emu import Emu                  # noqa: E402
 
-FRONT = os.path.join(ROOT, "port/ja1front/target/release/ja1front")
+FRONT = os.path.join(ROOT, "port/ja1front/target/release/ja1-port")
 FN, SOL = 0x17B70, 0xFA958
 
 args = [a for a in sys.argv[1:] if not a.startswith("--")]

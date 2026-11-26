@@ -28,7 +28,7 @@ dump = next((a for a in args if a.endswith(".bin")), os.path.join(ROOT, "build",
 pairs = [a for a in args if not a.endswith(".bin")]
 SCRIPTS = list(zip(pairs[::2], pairs[1::2])) or [("DAT\\ENDSAB.DAT", m) for m in
                                                  ("LOS1GAME.SAB", "LOS2GAME.SAB", "WINGAME.SAB")]
-FRONT = os.path.join(ROOT, "port/ja1front/target/release/ja1front")
+FRONT = os.path.join(ROOT, "port/ja1front/target/release/ja1-port")
 ISO, EXE = os.path.join(ROOT, "rom/JA1.gog"), os.path.join(ROOT, "build/game113b/JA.EXE")
 SCREEN_PTR, BUFS = 0x95678, 0x93E80      # screen pointer; work buffers: 4 x (ptr, w, h)
 DAC_COPY = 0xEDA08                       # the DAC copy (the tile palette, RGBX) that op 0x35 shows

@@ -1,6 +1,6 @@
-# Live script mode: `ja1front --serve` (#30)
+# Live script mode: `ja1-port --serve` (#30)
 
-`ja1front JA1.gog JA.EXE --serve SAVE|menu SEED LOG OUT` runs the same play loop as `--script SAVE|menu SEED SCRIPT
+`ja1-port JA1.gog JA.EXE --serve SAVE|menu SEED LOG OUT` runs the same play loop as `--script SAVE|menu SEED SCRIPT
 OUT` (port/ja1front/src/main.rs `fn script`), but the script lines come from stdin in chunks. The test player
 (validate/gate_campaign.py `Run` with `LIVE`, `WN_LIVE=1` in validate/week_normal.py) keeps one process per start
 save and sends only the lines that are new since its last run, so a run no longer replays the day's lines again.
@@ -49,7 +49,7 @@ process its own directory and copies it to the run's directory after each sync.
 
 ## Errors
 
-A refused sync or a failed command prints the error on stderr (`ja1front: serve: ...`) and exits with code 1,
+A refused sync or a failed command prints the error on stderr (`ja1-port: serve: ...`) and exits with code 1,
 without the sync output. The test player then replays the run with `--script` (which shows the real error, if any)
 and starts a new process for the next run.
 

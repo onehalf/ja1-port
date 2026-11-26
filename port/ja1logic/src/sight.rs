@@ -19,7 +19,8 @@ impl Ai {
     fn tile_opacity(&self, t: i32, x: i32, y: i32, n: i32, d: i32) -> (i32, bool) {
         let o = self.tile_byte(t as u16, 1) as i32;
         if (0x37..=0x82).contains(&o) {
-            let v = get8(unsafe { (*self.w).window }, WINDOW_LEN, 8 * o as i64 + d as i64) as i8 as i32;
+            let i = 8 * o as i64 + d as i64;
+            let v = crate::fanfix::window_byte(i, get8(unsafe { (*self.w).window }, WINDOW_LEN, i)) as i8 as i32;
             return (v, false);
         }
         if (0x27..=0x36).contains(&o) {
@@ -90,7 +91,14 @@ impl Ai {
                 let (o, b) = self.tile_opacity(cur, x, y, steps, d);
                 opacity = o;
                 brush = b;
-                if opacity >= 0x62 {
+                if opacity >= 0x62 && crate::fanfix::on(7) {
+                    // Fan fix F07 (#70 row 7; 1.15m SightLine 0x5896C..0x5897C): no new limit within 15 steps;
+                    // past them 0x62 = steps + 30, 0x63 = steps + 27, a higher value = steps.
+                    if steps > 15 {
+                        lim = s16(match opacity { 0x62 => steps + 30, 0x63 => steps + 27, _ => steps });
+                    }
+                    opacity = 3;
+                } else if opacity >= 0x62 {
                     if steps > 15 {
                         lim = s16(if opacity == 0x62 { steps + 30 } else { steps });
                     } else if opacity == 0x63 {

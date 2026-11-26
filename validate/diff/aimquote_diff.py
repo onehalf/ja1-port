@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Differential test: the text of an A.I.M. refusal box, AimScreen 0x2011C sites 0x20583..0x2078D, original vs port.
 
-usage: .venv/bin/python validate/diff/aimquote_diff.py [ncases=500] [DUMP] [--lib SO]
+usage: .venv/bin/python validate/diff/aimquote_diff.py [ncases=500] [DUMP] [--lib SO] [--fan IDS]
+--fan IDS (#70): the original side runs the fan patch 1.15m code (Emu.put_115m), the port runs with the fan fixes IDS
+on (`all` or `F04`); without it the fixes are off and the original is 1.13b.
 The original runs in Unicorn from the call of MercRefusalReason 0x20583 (stub: returns the reason of the case) with the real
 PlayQuote 0x24F08, EncodeStringPlus1 0x35810 and StrReplace 0x252B0; the file calls read the real AIMQUOTE.EDT. Stubs: the
 voice file calls, strstr_ (faults in Unicorn), the box 0x28FB8 (takes the text, then ends the run).
@@ -21,7 +23,11 @@ from unicorn.x86_const import UC_X86_REG_ESP  # noqa: E402
 argv = sys.argv[1:]
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
-args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
+args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
+FAN = None
+if "--fan" in argv:
+    v = argv[argv.index("--fan") + 1]
+    FAN = (1 << 128) - 1 if v == "all" else sum(1 << (int(x.strip()[1:]) - 1) for x in v.split(","))
 ncases = int(args[0]) if args else 500
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
 if not os.path.exists(dump):
@@ -32,6 +38,12 @@ PORT = ctypes.CDLL(LIB)
 PORT.ja1f_aim_quote_text.argtypes = [ctypes.c_char_p] * 2 + [ctypes.c_void_p] * 3 + [ctypes.c_int] * 2 + [ctypes.c_void_p, ctypes.c_int]
 EDT = game_read("EDT\\AIMQUOTE.EDT")
 e = Emu(dump=dump, fast=True)
+if FAN is not None:
+    e.put_115m()
+PORT.ja1_fan_fixes_set.argtypes = [ctypes.c_uint64]
+PORT.ja1_fan_fixes_set((FAN or 0) & ((1 << 64) - 1))
+PORT.ja1_fan_fixes_set_hi.argtypes = [ctypes.c_uint64]
+PORT.ja1_fan_fixes_set_hi((FAN or 0) >> 64)
 rt = e.rt
 QUOTE, PROF, SHARED, DST, TEXTBUF, AIMP = 0x22A1EA, 0xEBB40, 0x2299BC, 0x229B1C, 0xEBAC0, 0x22A044
 st = {}
@@ -151,7 +163,7 @@ for c in range(ncases):
             if bad <= 8:
                 print(f"case {c}: p {p} reason {reason} m {m}: {label}\n  orig {a[:200]!r}\n  port {b[:200]!r}")
             break
-print(f"aimquote_diff: {cases} cases, {named} with MEMBER, {late} of them late, {bad} mismatches")
+print(f"aimquote_diff{f' --fan {FAN:#x}' if FAN is not None else ''}: {cases} cases, {named} with MEMBER, {late} of them late, {bad} mismatches")
 if bad or cases < ncases or not late:
     sys.exit(1)
 print("aimquote_diff: all equal")

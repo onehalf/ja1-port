@@ -173,7 +173,8 @@ impl Ai {
                             self.wr8(e + 8 + m, self.rd8(e + 9 + m));
                         }
                         // The original game's mistake (bug list row 9): the record's byte 0x0B, not the entry's.
-                        self.wr8(0x0B, 0);
+                        // Port fix P01 (#71, level all): the ring entry's own byte 0x0B.
+                        self.wr8(if crate::fanfix::port_on(1) { e + 0x0B } else { 0x0B }, 0);
                     } else {
                         self.wr8(e + k + 7, 0);
                     }

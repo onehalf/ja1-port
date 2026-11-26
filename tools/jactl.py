@@ -175,7 +175,7 @@ class Live:
         if self.objs is None and self.locate() is None:
             raise RuntimeError("JA.EXE is not loaded in the guest yet")
         for lo, hi, d in self.objs:
-            if lo <= addr < hi:
+            if lo <= addr < (hi + 0xFFF) & ~0xFFF:     # to the end of the last page: 1.15m tail code (#70)
                 return d
         raise ValueError(f"0x{addr:X} is outside the image")
 

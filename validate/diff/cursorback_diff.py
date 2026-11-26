@@ -8,6 +8,11 @@ SetMouseShape 0x674B0 and the mouse limit 0x682AC (it answers 0) are stubbed. Th
 Compared: all soldier records, the 12 cursor bytes, the flag, drop_answer 0x229D18 (the old value when nothing happens).
 On the original side only: the shape call (0, 0, 0x13F) and the limit call with 0: the port's pointer comes from the cursor item.
 Not compared: strip boxes above 6 (StripClick finds only 7 boxes).
+--pfix 22 (#71, #2 row 64): the original with the cave at 0x536BD (a full strip entry: the first empty entry in strip order,
+else PutItem 0x3FC78 on the merc's tile), the port at fix level `all` (ja1f_cursor_back_host on the whole tac60 world).
+Per case the selected merc's 7 strip entries are empty or full, +0x17A and +0x48 (vest pockets) are random; the ground
+items and the tile map are restored each case. Compared: the merc's record, the cursor bytes, the 200 ground items, the
+tile map (record +0x90, the script pointer, left out). Without --pfix the plain run keeps the bug (the copy over the shown entry).
 Exits 1 on mismatch.
 """
 import ctypes, os, random, sys
@@ -15,9 +20,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 sys.path[:0] = [HERE, os.path.join(ROOT, "tools")]
 import port_lib  # noqa: E402
+import pfix  # noqa: E402
 from emu import Emu  # noqa: E402
 
 argv = sys.argv[1:]
+PFIX = pfix.parse(argv)
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
 args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
@@ -46,6 +53,61 @@ def report(c, msg):
     if bad <= 12:
         print(f"case {c}: {msg}")
 
+
+class _FrontFixes:          # the port side is libja1front: its own copy of the fix masks
+    @staticmethod
+    def port_fixes(m):
+        PORT.ja1_port_fixes_set.argtypes = [ctypes.c_uint64]
+        PORT.ja1_port_fixes_set(m)
+
+
+if PFIX:
+    import ai  # noqa: E402
+    pfix.apply(e, PFIX, _FrontFixes)
+    PORT.ja1f_cursor_back_host.argtypes = [ctypes.POINTER(port_lib.World), ctypes.POINTER(port_lib.Host)]
+    GROUND, TMAP = (ai.G_GROUND_ITEMS, 200 * 12), (ai.G_TILEMAP, 8 * 3136)
+    keep = {a: bytes(e.uc.mem_read(rt(a), n)) for a, n in (GROUND, TMAP)}
+    host = port_lib.Host(None, port_lib.RANDOM_FN(lambda _c, k: 0), port_lib.CALL_FN(lambda *_a: 0), 0)
+    rng = random.Random(64)
+    present = [k for k in range(8) if e.r8(rt(SOLDIERS + 0x200 * k)) or e.r8(rt(SOLDIERS + 0x200 * k + 1))]
+    ground = 0
+    for c in range(ncases):
+        for a, b in keep.items():
+            e.uc.mem_write(rt(a), b)
+        sel, box = rng.choice(present), rng.randrange(7)
+        r0 = rt(SOLDIERS + 0x200 * sel)
+        full = rng.random() < 0.4
+        for k in (0, 7, 8, 9, 10, 11, 1):
+            ent = bytes([rng.randrange(1, 0x60), rng.randrange(1, 4), rng.randrange(1, 101)]) + bytes(9)
+            e.uc.mem_write(r0 + 12 * k, ent if full or rng.random() < 0.7 else bytes(12))
+        e.w8(r0 + 0x17A, rng.choice((0, 7, 8, 9)))
+        e.w8(r0 + 0x48, rng.choice((0, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36)))
+        item = bytes([rng.randrange(1, 0x60), 1, rng.randrange(1, 101)]) + bytes([0, 0, 0, 0xFF]) + bytes(5)
+        e.w8(rt(DRAWN), 1)
+        e.w8(rt(FLAG), 1)
+        e.uc.mem_write(rt(HELD), item)
+        e.w8(rt(SELECTED), sel)
+        e.w8(rt(BOX), box)
+        bufs, sc = port_lib.world_load(e, ai)
+        arrays = {k: (ctypes.c_uint8 * len(v)).from_buffer(v) for k, v in bufs.items()}
+        w = port_lib.World(**{k: ctypes.cast(a, port_lib.u8p) for k, a in arrays.items()}, **sc)
+        w.cursor_drop, w.drop_answer, w.strip_box = 1, 0, box
+        log.clear()
+        e.call(rt(0x53660))
+        r = PORT.ja1f_cursor_back_host(ctypes.byref(w), ctypes.byref(host))
+        g0 = bytes(e.uc.mem_read(rt(GROUND[0]), GROUND[1]))
+        ground += g0 != keep[GROUND[0]]
+        o = (bytes(e.uc.mem_read(r0, 0x200)), bytes(e.uc.mem_read(rt(HELD), 12)), g0,
+             bytes(e.uc.mem_read(rt(TMAP[0]), TMAP[1])))
+        p = (bytes(bufs["soldiers"][0x200 * sel:0x200 * sel + 0x200]), bytes(bufs["held"]), bytes(bufs["ground_items"]),
+             bytes(bufs["tiles"]))
+        o, p = (o[0][:0x90] + o[0][0x94:],) + o[1:], (p[0][:0x90] + p[0][0x94:],) + p[1:]   # +0x90: script pointer / offset
+        for name, a, b in zip(("record", "held", "ground items", "tile map"), o, p):
+            if a != b:
+                i = next(i for i in range(len(a)) if a[i] != b[i])
+                report(c, f"sel {sel} box {box}: {name} byte {i}: original {a[i]:#x} port {b[i]:#x} (port acted {r})")
+    print(f"cursorback_diff --pfix {','.join(map(str, PFIX))}: {ncases} cases, {ground} to the ground: {bad} mismatches")
+    sys.exit(1 if bad or ground < ncases // 10 else 0)
 
 rng = random.Random(53)
 acted = 0

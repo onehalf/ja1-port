@@ -19,6 +19,7 @@ extern "C" {
     fn ja1_aim_open(w: *mut Ja1World, h: *const Ja1Host) -> i32;
     fn ja1_aim_browse(w: *mut Ja1World, h: *const Ja1Host, q: i32, d: i32) -> i32;
     fn ja1_aim_refusal(w: *mut Ja1World, h: *const Ja1Host, p: i32) -> i32;
+    fn ja1_aim_refusal_rule(w: *mut Ja1World, h: *const Ja1Host, p: i32) -> i32;
     fn ja1_aim_hire(w: *mut Ja1World, h: *const Ja1Host, p: i32) -> i32;
     fn ja1_aim_cancel_pending(w: *mut Ja1World, h: *const Ja1Host);
     fn ja1_aim_pay(w: *mut Ja1World, h: *const Ja1Host) -> i32;
@@ -35,6 +36,9 @@ const DARK: usize = 30;
 
 pub const FUNDS_WARNING: &str = "WARNING! You do not have enough funds to authorize helicopter transportation.";
 pub const TEAM_FULL: &str = "Your team is complete. If you wish to hire another member, you must get rid of somebody.";
+/// 0x9771F (fan fix F63): the helicopter warning before an old debt is paid.
+pub const DEBT_WARNING: &str =
+    "WARNING! If you interview this person, you will not have enough funds to authorize helicopter transportation.";
 pub const NO_FUNDS: &str = "Save your mouse finger - you have insufficient funds.";
 pub const TERMINATE: &str = "Terminate communication with A.I.M.?";
 pub const CANT_AFFORD: &str = "You can't afford the helicopter charge...";
@@ -125,7 +129,8 @@ enum Over {
     /// The A.I.M. statistics page (its picture; the A.I.M. palette while it shows).
     Info { img: Vec<u8>, aim_pal: [u8; 768] },
     /// The salary panel of team record k (strategic.md "The salary panel") while the right button is held.
-    Salary { k: usize, values: [i32; 10] },
+    /// `at` = #42 grid: the panel of a grid face at that place (the profile's values), else team record k's.
+    Salary { k: usize, values: [i32; 10], at: Option<(i32, i32)> },
     /// panel.md "Item info box" from the gear view (strategic.md "The gear view item click"): the screen with the box
     /// or the picture (None: Item Info off, no box), what was drawn, the wait step of step 7 (0 = both buttons up,
     /// 1 = a button down, 2 = both up), the voice has a name sample, Item Info on, the kept mouse position and the
@@ -433,6 +438,11 @@ pub struct Aim {
     /// The row playing in the question box: its number, the row, the next frame and the time of the last frame
     /// step (None = the first step comes at once).
     sanim: Option<(i32, crate::sanim::Anim, usize, Option<std::time::Instant>)>,
+    /// #42 mod `aim_browser` (aimgrid.rs): the grid state; None = the setting is off (the screen of the original).
+    grid: Option<crate::aimgrid::Grid>,
+    /// #42 Insert #13517 item 7: a quote (an interview answer, a hire) ended on the merc page: back to the grid when
+    /// no box is left.
+    grid_due: bool,
 }
 
 /// What one poll did: script lines and the end of the screen.
@@ -475,7 +485,83 @@ impl Aim {
     /// picture.
     fn show(&mut self, w: &mut World) -> Vec<String> {
         let p = w.accounts.get(0xA4).copied().unwrap_or(0) as i32;
-        self.browse(w, p - 1, 1)
+        let mut lines = self.browse(w, p - 1, 1);
+        if self.grid.is_some() {
+            lines.push(self.grid_enter(w, false));
+        }
+        lines
+    }
+
+    /// #42: the grid (opening, INDEX): the hire kinds of the 60 mercs by the refusal rule with no voice
+    /// remark, the page of P, the picture.
+    /// `at_p`: the page that holds P (INDEX); else page 1 (the opening).
+    fn grid_enter(&mut self, w: &mut World, at_p: bool) -> String {
+        let mut reasons = [0i32; 60];
+        for (q, r) in reasons.iter_mut().enumerate() {
+            *r = 0xFF & self.call(w, |cw, h| unsafe { ja1_aim_refusal_rule(cw, h, q as i32) });
+        }
+        let kinds: [crate::aimgrid::Hire; 60] =
+            std::array::from_fn(|q| crate::aimgrid::hire_kind(&w.profiles, &w.soldiers, q, |q| reasons[q]));
+        let p = self.p(w);
+        if let Some(g) = self.grid.as_mut() {
+            g.kinds = kinds;
+            g.shown = true;
+            g.menu = None;
+            g.menu_hover = None;
+            g.title_lit = false;
+            g.view.page = 0;
+            if at_p {
+                let l = g.list(&w.profiles);
+                g.view.show(&l, p);
+            }
+        }
+        self.redraw(w);
+        let g = self.grid.as_ref().unwrap();
+        format!("aim grid sort {} desc {} filter {} page {} count {}", g.view.sort, g.view.desc as u8, g.view.filter,
+                g.view.page, g.list(&w.profiles).len())
+    }
+
+    /// #42: the merc of the grid cell under the mouse (grid shown, no menu open).
+    fn grid_face_at(&self, w: &World, x: i32, y: i32) -> Option<usize> {
+        let g = self.grid.as_ref().filter(|g| g.shown && g.menu.is_none())?;
+        let l = g.list(&w.profiles);
+        crate::aimgrid::cell_at(x, y, g.view.page, l.len()).map(|i| l[i])
+    }
+
+    /// #42: a click with the grid on. The grid: a menu pick (or the menu closed), a merc cell opens its page. The merc
+    /// page: INDEX goes back to the grid. True = the click is done.
+    fn grid_click(&mut self, w: &mut World, x: i32, y: i32, out: &mut Poll) -> bool {
+        let Some(g) = self.grid.as_mut() else { return false };
+        if !g.shown {
+            if crate::aimgrid::on_title(x, y) {
+                out.lines.push(self.grid_enter(w, true));
+                return true;
+            }
+            return false;
+        }
+        if let Some(m) = g.menu.take() {
+            let counts = crate::aimgrid::counts(&w.profiles, &g.kinds);
+            if let Some(i) = crate::aimgrid::menu_item(&self.pd.fonts, m, counts, x, y) {
+                if m == 0 { g.view.pick_sort(i) } else { g.view.pick_filter(i) }
+            }
+            out.lines.push(format!("aim grid sort {} desc {} filter {} page {} count {}", g.view.sort, g.view.desc as u8,
+                                   g.view.filter, g.view.page, g.list(&w.profiles).len()));
+            self.redraw(w);
+            return true;
+        }
+        if !crate::aimgrid::in_grid(x, y) {
+            return false;
+        }
+        let l = g.list(&w.profiles);
+        if let Some(i) = crate::aimgrid::cell_at(x, y, g.view.page, l.len()) {
+            g.shown = false;
+            g.hover = None;
+            w.accounts[0xA4] = l[i] as u8;
+            self.mode = page_mode(&w.profiles[l[i] * PROFILE..]);
+            self.redraw(w);
+            out.lines.push(format!("aim page {} mode {}", l[i], self.mode));
+        }
+        true
     }
 
     /// The files of the screen, and the fields at their start values.
@@ -495,7 +581,8 @@ impl Aim {
                           mode: 0, asked: [0; 60], view: AIM_VIEW.load(std::sync::atomic::Ordering::Relaxed), transfer: 0, tip: Tooltip::default(),
                           over: VecDeque::new(), buttons: 0, held: None, hold: None, ask_down: None, go_wait: None, msg_wait: None, held_keys: vec![], face_timer: 0, heli: heli_charge(w.difficulty),
                           msg_close: None, fire_who: (0, vec![]), said: Vec::new(), warp: None, talk_mouse: None, repeat: false, rep_at: None, exe: exe.to_string(), timed: false,
-                          sanim: None, blink: None, blink_sheet: None, blink_shown: 0 })
+                          sanim: None, blink: None, blink_sheet: None, blink_shown: 0,
+                          grid: crate::aimgrid::Grid::from_env(), grid_due: false })
     }
 
     /// A library call with this screen's host (random = the game's numbers, the item store of `w`).
@@ -554,9 +641,28 @@ impl Aim {
                 _ => balance(w),
             };
             self.funds(&mut p, shown);
-            self.labels(&mut p);
-            self.team(&mut p, w);
-            self.page(&mut p, w);
+            match &self.grid {
+                Some(g) if g.shown => {
+                    for b in 0..3 {
+                        crate::aimgrid::draw_label(&mut p, b, false);
+                    }
+                    self.team(&mut p, w);
+                    let dark = &self.c.remap[DARK];
+                    crate::aimgrid::draw(&mut p, &self.d.scr, dark, &w.profiles, &w.soldiers, &g.kinds, &g.view, g.hover);
+                    if let Some(m) = g.menu {
+                        let counts = crate::aimgrid::counts(&w.profiles, &g.kinds);
+                        crate::aimgrid::draw_menu(&mut p, m, &g.view, counts, g.menu_hover);
+                    }
+                }
+                g => {
+                    self.labels(&mut p);
+                    self.team(&mut p, w);
+                    self.page(&mut p, w);
+                    if let Some(g) = g {
+                        crate::aimgrid::draw_title(&mut p, &self.d.scr, g.title_lit);
+                    }
+                }
+            }
         }
         self.base = img;
         self.tip = Tooltip::default();
@@ -748,7 +854,7 @@ impl Aim {
                         out.lines.push(format!("aim again {} cat {} row {} quote {}", q[0], q[1],
                                                i16::from_le_bytes([q[2], q[3]]), i16::from_le_bytes([q[4], q[5]])));
                         self.over.push_back(Over::Quote { profile, nick, text });
-                        self.warp = question::prompt_warp(crate::ctlpanel::get(w, 5) != 0, (x, y));
+                        self.warp = question::prompt_warp(crate::ctlpanel::subtitles(w), (x, y));
                     }
                     None => out.lines.push(format!("aim again none {}", w.last_quote[0])),
                 },
@@ -774,6 +880,9 @@ impl Aim {
                 _ => {}
             }
         }
+        if self.over.is_empty() && std::mem::take(&mut self.grid_due) {
+            out.lines.push(self.grid_enter(w, true));
+        }
         if self.over.is_empty() {
             if self.timed {
                 self.blink_step(w, x, y, &mut out);
@@ -786,14 +895,20 @@ impl Aim {
             if buttons & 2 == 0 {
                 self.rep_at = None;
             }
-            if (press & 2 != 0 || again) && buttons & 1 == 0 && on_face(x, y) {
+            let grid_shown = self.grid.as_ref().is_some_and(|g| g.shown);
+            if (press & 2 != 0 || again) && buttons & 1 == 0 && on_face(x, y) && !grid_shown {
                 let p = self.p(w) as i32;
                 self.rep_at = Some(crate::dostime::now_ms());
                 out.lines.extend(self.browse(w, p, 1));
+            } else if let (2, Some(p)) = (buttons & 3, self.grid_face_at(w, x, y)) {
+                // #42: the right button held on a grid face: PANEL_S with the merc's salary and stats (mockup).
+                let values = crate::aimgrid::stats(&w.profiles, p);
+                self.over.push_back(Over::Salary { k: 0, values, at: Some(((x + 8).clamp(4, 170), (y - 30).clamp(5, 99))) });
+                out.lines.push(format!("aim grid stats {} {:?}", p, values));
             } else if let (2, Some(k)) = (buttons & 3, team_face_at(w, x, y)) {
                 // strategic.md "The salary panel": shown while the right button is held.
                 let values = salary_values(&w.soldiers[k * SOLDIER..]);
-                self.over.push_back(Over::Salary { k, values });
+                self.over.push_back(Over::Salary { k, values, at: None });
                 out.lines.push(format!("aim salary {} {:?}", k, values));
             } else if self.view == 1 && buttons & 3 != 0 && self.item_click(w, x, y, &mut out) {
             } else if press & 1 != 0 {
@@ -855,8 +970,13 @@ impl Aim {
                 if keys.contains(&13) || self.buttons & 1 != 0 {
                     self.pal = *aim_pal;
                     self.over.pop_front();
-                    self.redraw(w);
                     out.lines.push("aim info end".into());
+                    // #42 Insert #13517 item 7: back from the statistics page to the grid.
+                    if self.grid.is_some() {
+                        out.lines.push(self.grid_enter(w, true));
+                    } else {
+                        self.redraw(w);
+                    }
                 }
             }
             Some(Over::Salary { .. }) => {
@@ -946,6 +1066,7 @@ impl Aim {
         if wait.pass(&input).end.is_some() {
             let (n, boxed) = (wait.face.redraws, quote.is_some());
             self.over.pop_front();
+            self.grid_due = self.grid.as_ref().is_some_and(|g| !g.shown);
             crate::sound::screen(|s| s.speech_stop());
             if boxed {
                 if let Some((before, after)) = self.talk_mouse.take() {
@@ -967,7 +1088,9 @@ impl Aim {
     /// panel.md "Face animation", A.I.M. screen: only for an available merc (mode 0), the eyes blink while the mouse
     /// is off the face; on the face the face's own eyes show.
     fn blink_step(&mut self, w: &World, x: i32, y: i32, out: &mut Poll) {
-        if self.mode != 0 {
+        // #42 Insert #13517 item 1: the grid covers the merc page, so its face does not blink (the eyes showed
+        // over the top left cells).
+        if self.mode != 0 || self.grid.as_ref().is_some_and(|g| g.shown) {
             return;
         }
         let now = crate::dostime::now_ms();
@@ -1004,7 +1127,14 @@ impl Aim {
         }) else {
             return false;
         };
-        self.eyes(w, 0);
+        // ORIGINAL BUG (#2 row 65): FaceEyeFrame 0x27D64 draws the open eyes over a dark face too (DECEASED, or the
+        // stamp 0x3C of a merc on the team or on assignment), so a light square shows in it. Port fix P23: a dark face
+        // gets no eye frame.
+        let pr = &w.profiles[pi * PROFILE..(pi + 1) * PROFILE];
+        let dark = pr[0x2A] == 0 || (self.mode != 0 && pr[0x4B] != 0);
+        if !(dark && ja1logic::fanfix::port_on(23)) {
+            self.eyes(w, 0);
+        }
         // Only a merc who is not on the team, or only hired in this visit (b19D ≠ 0), shows the box.
         let on = (0..8).any(|k| w.soldiers[k * SOLDIER + 0x182] != 0 && w.soldiers[k * SOLDIER + 0x179] == pi as u8);
         let pending = hired_this_visit(&w.soldiers, pi as u8) != 0;
@@ -1016,7 +1146,7 @@ impl Aim {
         let count = if it.get(t as usize * 12 + 6).copied() == Some(1) { it.get(t as usize * 12 + 5).copied().unwrap_or(0) as i8 } else { 1 };
         let info = crate::ctlpanel::get(w, 6) != 0;
         let i = crate::iteminfo::Info { profile: pi as u8, t, count, value: 20, numbers: false, opt_info: info,
-                                        opt_sub: crate::ctlpanel::get(w, 5) != 0 };
+                                        opt_sub: crate::ctlpanel::subtitles(w) };
         let mut img = self.picture();
         let mut table0 = self.c.remap[0];
         let shown = {
@@ -1043,6 +1173,7 @@ impl Aim {
         self.over.push_back(Over::Item { img, shown, step: 0, voice, info, kept: (x, y), at });
         true
     }
+
 
     /// panel.md "Item info box" step 7 for the gear view box.
     fn item_wait(&mut self, x: i32, y: i32, out: &mut Poll) {
@@ -1085,6 +1216,31 @@ impl Aim {
 
     /// The tooltip of P's face (number 9) or of a team face (k + 1); elsewhere none.
     fn hover(&mut self, w: &World, x: i32, y: i32) {
+        // #42 Insert #13517 item 6: on the merc page the A.I.M. title lights under the mouse (the link to the grid).
+        if let Some(g) = self.grid.as_mut().filter(|g| !g.shown) {
+            let lit = crate::aimgrid::on_title(x, y);
+            if lit != g.title_lit {
+                g.title_lit = lit;
+                let mut table0 = self.c.remap[0];
+                let mut p = Painter { d: &self.pd, buf: &mut self.base, table0: &mut table0, table29: panel::table29(&self.c) };
+                crate::aimgrid::draw_title(&mut p, &self.d.scr, lit);
+            }
+        }
+        if let Some(g) = self.grid.as_mut().filter(|g| g.shown) {
+            // #42: the frame of the merc under the mouse (none while a menu is open).
+            let l = g.list(&w.profiles);
+            let h = if g.menu.is_some() { None } else { crate::aimgrid::cell_at(x, y, g.view.page, l.len()).map(|i| l[i]) };
+            let counts = crate::aimgrid::counts(&w.profiles, &g.kinds);
+            let mh = g.menu.and_then(|m| crate::aimgrid::menu_item(&self.pd.fonts, m, counts, x, y));
+            if h != g.hover || mh != g.menu_hover {
+                g.hover = h;
+                g.menu_hover = mh;
+                self.redraw(w);
+            }
+            if crate::aimgrid::in_grid(x, y) {
+                return;
+            }
+        }
         let mut table0 = self.c.remap[0];
         let mut base = std::mem::take(&mut self.base);
         {
@@ -1112,6 +1268,9 @@ impl Aim {
     }
 
     fn click(&mut self, w: &mut World, x: i32, y: i32, out: &mut Poll) {
+        if self.grid_click(w, x, y, out) {
+            return;
+        }
         if on_face(x, y) {
             if balance(w) < 1 {
                 return;
@@ -1162,7 +1321,7 @@ impl Aim {
             } else {
                 self.fire_who = (s[0x179], cstr(&s[0x16E..0x177]));
                 self.over.push_back(Over::Ask(Ask::Fire(k)));
-                self.warp = question::prompt_warp(crate::ctlpanel::get(w, 5) != 0, (x, y));
+                self.warp = question::prompt_warp(crate::ctlpanel::subtitles(w), (x, y));
                 out.lines.push(format!("aim ask fire {}", k));
                 out.lines.push(format!("aim text {}", String::from_utf8_lossy(&self.ask_text(Ask::Fire(k)).0)));
             }
@@ -1180,6 +1339,34 @@ impl Aim {
     /// The action of screen button b (0 EXIT, 1 INFO, 2 GEAR / BIO, 3 and 4 the arrows) after its release.
     fn button_action(&mut self, w: &mut World, b: usize, out: &mut Poll) {
         let p = self.p(w) as i32;
+        if let Some(g) = self.grid.as_mut() {
+            // #42: the grid's SORT / FILTER menus and page arrows; on the merc page the arrows follow the list.
+            let l = g.list(&w.profiles);
+            match (g.shown, b) {
+                (true, 1 | 2) => {
+                    g.menu = Some(b as u8 - 1);
+                    out.lines.push(format!("aim grid menu {}", b - 1));
+                    self.redraw(w);
+                    return;
+                }
+                (true, 3 | 4) => {
+                    g.view.flip(l.len(), if b == 3 { -1 } else { 1 });
+                    out.lines.push(format!("aim grid page {}", g.view.page));
+                    self.redraw(w);
+                    return;
+                }
+                (false, 3 | 4) => {
+                    if let Some(q) = crate::aimgrid::step(&l, p as usize, if b == 3 { -1 } else { 1 }) {
+                        w.accounts[0xA4] = q as u8;
+                        self.mode = page_mode(&w.profiles[q * PROFILE..]);
+                        self.redraw(w);
+                        out.lines.push(format!("aim page {} mode {}", q, self.mode));
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
         match b {
             0 => self.leave(w, out),
             1 => self.info(w, out),
@@ -1240,6 +1427,12 @@ impl Aim {
                     self.over.push_back(Over::Msg { text: NO_FUNDS.as_bytes().to_vec(), left: false });
                     out.lines.push("aim msg no funds".into());
                 } else {
+                    // Fan fix F63 (#70 row 65): 1.15m AimScreen 0x2070E -> cave 0x6F735: the debt is payable, but
+                    // not with the helicopter charge on top: the warning box first, then the payment goes on.
+                    if ja1logic::fanfix::on(63) && heli_charge(w.difficulty).wrapping_add(x) > balance(w) {
+                        self.over.push_back(Over::Msg { text: DEBT_WARNING.as_bytes().to_vec(), left: false });
+                        out.lines.push("aim msg debt warning".into());
+                    }
                     self.mode = 3;
                     self.transfer = x;
                 }
@@ -1262,7 +1455,7 @@ impl Aim {
         }
         let pr = &w.profiles[pi * PROFILE..(pi + 1) * PROFILE];
         let nick = cstr(&pr[..10]).to_vec();
-        let sub = crate::ctlpanel::get(w, 5) != 0;
+        let sub = crate::ctlpanel::subtitles(w);
         if sub {
             out.lines.push(format!("aim quote {} {}", pi, q));
         }
@@ -1474,7 +1667,12 @@ impl Aim {
         let mut p = Painter { d: &self.pd, buf: &mut img, table0: &mut table0, table29: panel::table29(&self.c) };
         match self.over.front() {
             Some(Over::Info { img, .. }) | Some(Over::Item { img: Some(img), .. }) => return img.clone(),
-            Some(Over::Salary { k, values }) => salary_panel(&mut p, &self.main, *k, values),
+            Some(Over::Salary { k, values, at: None }) => salary_panel(&mut p, &self.main, *k, values),
+            Some(Over::Salary { values, at: Some((x, y)), .. }) => salary_panel_at(&mut p, &self.main, *x, *y, values),
+            // #42 Insert #13517 item 5: the grid's pressed EXIT / SORT / FILTER show the grid's label.
+            None if self.held.is_some_and(|b| b < 3) && self.grid.as_ref().is_some_and(|g| g.shown) => {
+                crate::aimgrid::draw_pressed_face(&mut p, self.held.unwrap_or(0));
+            }
             None if self.held.is_some() => pressed_button(&mut p, self.held.unwrap_or(0), self.view),
             Some(Over::Msg { text, left: false }) => {
                 crate::msgbox::draw(&mut p, text, &self.c.remap[DARK], crate::msgbox::frame_colour(DARK))
@@ -1585,8 +1783,9 @@ fn page_draw(p: &mut Painter, c: &crate::Common, d: &AimData, main: &invdraw::In
     }
     // ORIGINAL BUG (#2): 0x215BC restores save area 5, but ShowAimScreen saves area 4 after area 5, and their back
     // buffer rects share a row. So the first 32 pixels of row 78 show the screen's row 192 from x 280.
+    // Port fix P10 (#2 row 46): area 4 saved first, so area 5 keeps its own pixels (nothing to copy).
     let (sw, row) = (d.scr.0, 192 * d.scr.0);
-    if d.scr.2.len() >= row + sw {
+    if d.scr.2.len() >= row + sw && !ja1logic::fanfix::port_on(10) {
         p.buf[78 * PW as usize + 16..78 * PW as usize + 48].copy_from_slice(&d.scr.2[row + 280..row + 312]);
     }
     p.text(&cstr(&pr[0..10]), 38, 76, true, 0x28, 0x32, 2);    // 0x215BC: colour 0x28
@@ -1805,7 +2004,11 @@ pub(crate) fn salary_values(s: &[u8]) -> [i32; 10] {
 
 pub(crate) fn salary_panel(p: &mut Painter, main: &InvData, k: usize, values: &[i32; 10]) {
     let x = if k % 2 == 0 { 170 } else { 214 };
-    let y = (40 * (k as i32 / 2) - 13).clamp(5, 99);
+    salary_panel_at(p, main, x, (40 * (k as i32 / 2) - 13).clamp(5, 99), values);
+}
+
+/// PANEL_S.PCC (96 x 99) with the 10 values at (x, y).
+pub(crate) fn salary_panel_at(p: &mut Painter, main: &InvData, x: i32, y: i32, values: &[i32; 10]) {
     let mut scratch = vec![0u8; 64000];
     let mut table0 = *p.table0;
     {
@@ -2042,6 +2245,71 @@ mod count_tests {
         assert_eq!(out.lines.iter().find(|l| l.starts_with("aim blink")).unwrap(), &format!("aim blink {}", a.blink_shown));
         assert_ne!(a.blink_shown, 0);
         assert!(a.base != before, "no eye frame on the page");
+    }
+
+    /// #42 Insert #13517 item 1: with the grid shown, a mouse sweep over every grid cell draws no part of the merc
+    /// page (no eye frame, no face tooltip): each pass leaves the picture that a redraw with the same hover gives.
+    #[test]
+    fn the_grid_hides_every_merc_page_hot_spot() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let (iso, exe) = (root.join("rom/JA1.gog"), root.join("build/game113b/JA.EXE"));
+        if !iso.exists() || !exe.exists() {
+            return;
+        }
+        let (iso, exe) = (iso.to_str().unwrap(), exe.to_str().unwrap());
+        let mut w = World::new_game(iso, exe, 0, 0).unwrap();
+        let (mut a, _) = Aim::new(iso, exe, &mut w, 1).unwrap();
+        a.grid = Some(crate::aimgrid::Grid { kinds: [crate::aimgrid::Hire::Yes; 60], ..crate::aimgrid::Grid::new() });
+        a.mode = 0;
+        a.timed = true;
+        a.redraw(&w);
+        for r in 0..crate::aimgrid::ROWS as i32 {
+            for c in 0..crate::aimgrid::COLS as i32 {
+                for (dx, dy) in [(2, 2), (19, 13), (35, 35)] {
+                    let (x, y) = (crate::aimgrid::GX + crate::aimgrid::CW * c + dx, crate::aimgrid::GY + crate::aimgrid::CH * r + dy);
+                    a.blink = Some(crate::faceanim::AimBlink::new(0, crate::dostime::now_ms() - 10, crate::faceanim::AnimRng::new(7)));
+                    let out = a.poll(&mut w, x, y, 0, &[]);
+                    assert!(!out.lines.iter().any(|l| l.starts_with("aim blink") || l.starts_with("aim page")), "{x},{y}: {:?}", out.lines);
+                    let got = a.picture();
+                    a.redraw(&w);
+                    assert!(got == a.picture(), "merc page pixels at ({x}, {y})");
+                }
+            }
+        }
+    }
+    /// #2 row 65, port fix P23: a held click on a gear item of a merc with the dark face (the stamp 0x3C, mode 1)
+    /// draws the open eyes over the stamp in 1.13b; with P23 the page stays as it is. A light face gets the eyes both
+    /// ways.
+    #[test]
+    fn a_gear_click_draws_no_eyes_on_a_dark_face_with_p23() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let (iso, exe) = (root.join("rom/JA1.gog"), root.join("build/game113b/JA.EXE"));
+        if !iso.exists() || !exe.exists() {
+            return;
+        }
+        let _lock = crate::sound::TEST_FIX_MASK.lock().unwrap_or_else(|e| e.into_inner());
+        let mask = ja1logic::fanfix::port_mask();
+        let (iso, exe) = (iso.to_str().unwrap(), exe.to_str().unwrap());
+        let mut w = World::new_game(iso, exe, 0, 0).unwrap();
+        let (mut a, _) = Aim::new(iso, exe, &mut w, 1).unwrap();
+        let pi = a.p(&w);
+        assert!(w.profiles[pi * PROFILE + 0x50..pi * PROFILE + 0x5A].iter().any(|&t| t != 0), "merc {pi} has no kit");
+        a.view = 1;
+        for (dark, fix, want_eyes) in [(true, false, true), (true, true, false), (false, true, true)] {
+            ja1logic::fanfix::port_set(if fix { 1 << 22 } else { 0 });
+            a.mode = if dark { 1 } else { 0 };
+            w.profiles[pi * PROFILE + 0x4B] = dark as u8;
+            a.over.clear();
+            a.redraw(&w);
+            // The eyes differ from the page's own: blink frame 2 first (a light face), then the click's frame 0.
+            if !dark {
+                a.eyes(&w, 2);
+            }
+            let before = a.base.clone();
+            assert!(a.item_click(&mut w, 20, 110, &mut Poll::default()));
+            assert_eq!(a.base != before, want_eyes, "dark {dark} P23 {fix}");
+        }
+        ja1logic::fanfix::port_set(mask);
     }
 
     /// panel.md "Item info box" step 7 for the gear view box: with the box shown, a press less than 10 pixels from

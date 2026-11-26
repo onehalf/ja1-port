@@ -455,7 +455,9 @@ mod tests {
         crate::ctlpanel::set(&mut w, 5, 1 - fresh.1.min(1));
         w.sound_setup.sound_driver = false;
         w.sound_setup.music_driver = false;
+        w.walter_sector = 5; // 1.13b NewGameInit does not write 0x92E2D (no day save holds it): it stays
         let n = new_game_after(iso, exe, &w).unwrap();
+        assert_eq!(n.walter_sector, 5);
         assert_eq!((crate::ctlpanel::get(&n, 4), crate::ctlpanel::get(&n, 5)), (1 - fresh.0.min(1), 1 - fresh.1.min(1)));
         assert!(!n.sound_setup.sound_driver && !n.sound_setup.music_driver);
         assert_eq!((n.difficulty, n.accounts[0xA3]), (2, 0));

@@ -1,6 +1,9 @@
 """Differential test: the tactical view modes (panel.md "View modes (keys PgUp, PgDn, Insert, Tab)"), original vs port.
 
-usage: .venv/bin/python validate/diff/viewmode_diff.py [ncases=4000] [DUMP] [--port] [--lib SO]
+usage: .venv/bin/python validate/diff/viewmode_diff.py [ncases=4000] [DUMP] [--port] [--lib SO] [--fan 45]
+--fan 45 (#70 F45, row 80): the original runs the 1.15m Insert branch bytes, the port fan fix F45.
+--pfix 15 (#71, #2 row 33): the original with the P15 patch (0x249E4 `je` gone, cave at 0x24B64: the overview holds
+mode-1 coordinates), the port at fix level `all`.
 Per case: fuzzed view values (mode, view x / y, window, small panel, last wide mode, overview filter, mouse) and an
 action: Set mode 0x248E4 (m) with a fuzzed signed byte m, or one key branch of TacticalKeyHandler (PgUp 0x1386A,
 PgDn 0x13891, Insert 0x137C8, Tab 0x13F7B; the run ends at the handler's common tail 0x1409B). The original runs in
@@ -13,11 +16,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
 sys.path[:0] = [HERE, os.path.join(ROOT, "tools")]
 from emu import Emu                  # noqa: E402
+import pfix                          # noqa: E402
 
 argv = sys.argv[1:]
+PFIX = pfix.parse(argv)
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
-args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
+args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
+FAN = "--fan" in argv
 ncases = int(args[0]) if args else 4000
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
 PORT = None
@@ -25,6 +31,8 @@ if "--port" in argv:
     PORT = ctypes.CDLL(LIB)
     PORT.ja1f_view_mode.argtypes = [ctypes.c_void_p, ctypes.c_int32, ctypes.c_int32]
     PORT.ja1f_view_mode.restype = ctypes.c_int32
+    PORT.ja1_fan_fixes_set.argtypes = [ctypes.c_uint64]
+    PORT.ja1_fan_fixes_set((1 << 44) if FAN else 0)
 
 # ViewMode field -> (address, size, signed) in the port's field order; None = an out value of the stubs
 FIELDS = [(0x92DDF, 1, 0), (0x229CF8, 4, 1), (0x229CFC, 4, 1), (0x229CC8, 4, 1), (0x229CD0, 4, 1), (0x229CB8, 4, 1),
@@ -42,6 +50,16 @@ e.stub(rt(0x1D8B8), lambda em, a, *r: calls["marks"].append(a & 0xFF))
 e.stub(rt(0x2F928), lambda em, a, d, *r: calls["strips"].append((a, d)))
 e.stub(rt(0x681D0), lambda em, a, d, *r: calls["mouse"].append((a, d)))
 e.stub(rt(0x1409B), lambda em, *a: 0)         # the key handler's common tail: end of a key run
+if FAN:                                       # #70 F45: the 1.15m Insert branch (0x137D0 jump, 0x137E0..0x137F0)
+    e.put_115m(only=[(0x137C8, 0x137F1)])
+if PFIX:
+    class _FrontFixes:                        # the port side is libja1front: its own copy of the fix masks
+        @staticmethod
+        def port_fixes(m):
+            if PORT:
+                PORT.ja1_port_fixes_set.argtypes = [ctypes.c_uint64]
+                PORT.ja1_port_fixes_set(m)
+    pfix.apply(e, PFIX, _FrontFixes)
 
 
 def get(f):
@@ -123,6 +141,6 @@ for i in range(ncases):
         print(f"HARNESS case {i}: {bad}")
 for a, (k, b) in save.items():
     e.uc.mem_write(rt(a), bytes(b))
-print(f"viewmode_diff: {ncases} cases (set {by_kind.get(0, 0)}, PgUp {by_kind.get(1, 0)}, PgDn {by_kind.get(2, 0)}, "
+print(f"viewmode_diff{' --fan 45' if FAN else ''}{' --pfix ' + ','.join(map(str, PFIX)) if PFIX else ''}: {ncases} cases (set {by_kind.get(0, 0)}, PgUp {by_kind.get(1, 0)}, PgDn {by_kind.get(2, 0)}, "
       f"Insert {by_kind.get(3, 0)}, Tab {by_kind.get(4, 0)}, overview click {by_kind.get(5, 0)}){'' if PORT else ' (original only)'}; {fails} mismatches")
 sys.exit(1 if fails else 0)

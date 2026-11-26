@@ -1,6 +1,8 @@
 """Differential test: tools/duties.py (the morning duties) vs 0x4B48C in Unicorn.
 
 usage: .venv/bin/python validate/diff/duties_diff.py [N=2000] [DUMP ...] [--seed S] [-v] [--port]
+--fan IDS (with --port; #70): the original side runs the fan patch 1.15m code (Emu.put_115m), the port runs with
+the fan fixes IDS on (`all` or `F02,F07`); the plain --port run checks the fixes off against 1.13b.
 --port: the clean-room library (ja1_morning_duties, port_lib) instead of the mirror; host op 281 practice is
 logged like the original's StatPractice call, random = the scripted random results.
 Each case fuzzes the 8 team mercs (hp, hpMax, the healed byte +0x19A, duty +0x17E, training +0x199, the stats,
@@ -29,6 +31,14 @@ VERBOSE = "-v" in sys.argv
 PORT = "--port" in sys.argv
 if PORT:
     import port_lib                  # noqa: E402
+FAN = None
+if "--fan" in sys.argv:
+    v = sys.argv[sys.argv.index("--fan") + 1]
+    args = [a for a in args if a != v]
+    dumps = [a for a in dumps if a != v] or [os.path.join(ROOT, "build", f"mem_{d}.bin") for d in DUMPS]
+    FAN = (1 << 128) - 1 if v == "all" else sum(1 << (int(x.strip()[1:]) - 1) for x in v.split(","))
+    if not PORT:
+        raise SystemExit("duties_diff: --fan needs --port")
 SOL = ai.G_SOLDIERS
 COVER = __import__("collections").Counter()
 STOP_EVERY = 500
@@ -53,6 +63,9 @@ class Case:
 
 def run_dump(path, rng, n):
     e = Emu(dump=path, fast=True)
+    if FAN is not None:
+        e.put_115m()
+    port_lib.fan_fixes(FAN or 0) if PORT else None
     rt = e.rt
     dd = rt(0x90000) - 0x90000
     case = [None]
@@ -253,7 +266,7 @@ def main():
         total += per
     if VERBOSE:
         print(" ".join(f"{k}:{v}" for k, v in sorted(COVER.items())))
-    print(f"duties_diff{' --port' if PORT else ''}: {total} cases on {len(dumps)} dumps ({STOPS[0]} stop cases), "
+    print(f"duties_diff{' --port' if PORT else ''}{f' --fan {FAN:#x}' if FAN is not None else ''}: {total} cases on {len(dumps)} dumps ({STOPS[0]} stop cases), "
           f"{fails} mismatches")
     sys.exit(1 if fails else 0)
 

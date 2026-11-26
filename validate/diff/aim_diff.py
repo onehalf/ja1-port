@@ -1,8 +1,9 @@
 """Differential test: the A.I.M. screen's logic (strategic.md "The A.I.M. screen"), original vs port (ja1_aim_*).
-usage: .venv/bin/python validate/diff/aim_diff.py [N=1200] [DUMP ...] [--seed S] [-v] [--port]
+usage: .venv/bin/python validate/diff/aim_diff.py [N=1200] [DUMP ...] [--seed S] [-v] [--port] [--fan 64]
 Without --port only the original runs (a smoke run of the harness). Sections (the original's procedure runs in
 Unicorn for real; the port's entry point through port_lib):
-- refusal: MercRefusalReason 0x219CC (AimRate 0x1FDEC, TeamHasProfile 0x50AC0 for real; PlayMercVoice 0x24D14
+- refusal: MercRefusalReason 0x219CC (with --port also the pure rule ja1_aim_refusal_rule of the #42 grid filter:
+  reason + remark profile, no host call, no memory change) (AimRate 0x1FDEC, TeamHasProfile 0x50AC0 for real; PlayMercVoice 0x24D14
   stubbed and logged = host op 337 aim_remark, which also stores m in 0x22A1F0) vs ja1_aim_refusal. Compared: the
   result, the call list and the data object.
 - hire: AimHire 0x22014 (merc join 0x21B74 for real, random scripted; quote, sound, face and drawing calls stubbed,
@@ -42,7 +43,8 @@ FACES = 0x93428
 MODE = (0x95F6C, 0x95F6D)
 REMARK = 0x22A1F0
 STASH_COUNTS = 0x93DD4
-args = [a for a in sys.argv[1:] if not a.startswith("-")]
+args = [a for i, a in enumerate(sys.argv[1:]) if not a.startswith("-") and sys.argv[i] != "--fan"]
+FAN = "--fan" in sys.argv   # --fan 64 (#70 F64, row 47; needs --port): the 1.15m opening block 0x20168..0x20199
 N = int(args[0]) if args and args[0].isdigit() else 1200
 dumps = [a for a in args if not a.isdigit()] or [os.path.join(ROOT, "build", f"mem_{d}.bin") for d in DUMPS]
 SEED = int(sys.argv[sys.argv.index("--seed") + 1]) if "--seed" in sys.argv else 1
@@ -132,7 +134,7 @@ def run_dump(path, rng, n):
             return 0, None
 
         argv_ = list(arg) if name == "browse" else [] if name in ("cancel", "open", "pay") else [arg]
-        entry = {"refusal": "aim_refusal", "hire": "aim_hire", "cancel": "aim_cancel_pending", "browse": "aim_browse",
+        entry = {"refusal": "aim_refusal", "refusal_rule": "aim_refusal_rule", "hire": "aim_hire", "cancel": "aim_cancel_pending", "browse": "aim_browse",
                  "open": "aim_open", "pay": "aim_pay"}[name]
         r = port_lib.sector_run(entry, bufs, scalars, argv_, lambda n_: case[0].random(n_ & 0xFFFF), call)
         port_lib.world_store(e, ai, bufs, scalars)
@@ -141,6 +143,12 @@ def run_dump(path, rng, n):
         return r
 
     data0 = bytes(e.uc.mem_read(rt(DATA_LO), DATA_HI - DATA_LO))
+    if FAN:
+        port_lib.fan_fixes(1 << 63)
+        e.put_115m(only=[(0x20168, 0x20199)])
+        # 1.15m 0x20193 encodes `test byte [ebx], -1` as F6 /1 (0C A3), which Unicorn refuses: the same test as F6 /0.
+        assert e.r8(rt(0x20194)) == 0x0C, hex(e.r8(rt(0x20194)))  # modrm /1 + SIB A3 = [ebx]
+        e.w8(rt(0x20194), 0x04)
     e.uc.mem_write(rt(0x20199), b"\xCC")       # int3 after AimScreen's opening block (LoadSanimDat follows)
     e.uc.mem_write(rt(0x210FD), b"\xCC")       # int3 after the exit branch
     pay_rng = random.Random(0x20F2E)
@@ -232,6 +240,20 @@ def run_dump(path, rng, n):
             diffs = [j for j in range(len(post_o)) if post_o[j] != post_p[j]]
             bad.append(f"memory ({len(diffs)}): " + ", ".join(f"0x{DATA_LO + j:X} {post_o[j]:02X}/{post_p[j]:02X}"
                                                              for j in diffs[:6]))
+        if name == "refusal" and 0 <= arg < 60:
+            # #42: the pure rule ja1_aim_refusal_rule (the A.I.M. grid filter) on the same start state: the reason,
+            # the remark profile of the original's voice call (0x40 = none), no host call, no memory change.
+            e.uc.mem_write(rt(DATA_LO), pre)
+            c.reset()
+            v = port_run("refusal_rule", arg)
+            v_m = next((x[2] for x in log_o if x[0] == "voice"), 0x40)
+            COVER["refusal_rule"] += 1
+            if (v & 0xFF, (v >> 8) & 0xFF) != (r_o, v_m):
+                bad.append(f"rule {r_o},{v_m}/{v & 0xFF},{(v >> 8) & 0xFF}")
+            if c.log:
+                bad.append(f"rule host calls {c.log[:3]}")
+            if bytes(e.uc.mem_read(rt(DATA_LO), DATA_HI - DATA_LO)) != pre:
+                bad.append("rule changed memory")
         if bad:
             fails += 1
             if fails <= 5:
@@ -357,7 +379,8 @@ def main():
     if VERBOSE:
         print("cover", dict(sorted(COVER.items())))
     print(f"CASES aim={total}")
-    print(f"aim_diff{' --port' if PORT else ' (original only)'}: {total} cases on {len(dumps)} dumps, {fails} mismatches")
+    print(f"aim_diff{' --port' if PORT else ' (original only)'}{' --fan 64' if FAN else ''}: {total} cases on {len(dumps)} dumps"
+          f"{' (refusal rule %d)' % COVER['refusal_rule'] if PORT else ''}, {fails} mismatches")
     sys.exit(1 if fails else 0)
 
 

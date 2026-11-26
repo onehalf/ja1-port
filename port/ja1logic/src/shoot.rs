@@ -72,6 +72,12 @@ impl Ai {
     }
 
     // ---- Launch (op 81) ----
+    /// A silencer on the gun. Fan fix F43 (#70 row 93; 1.15m LaunchProjectile 0x59187 / ShotEnd 0x56E05 ->
+    /// tail 0x8AD5A): it works only at condition >= 10 (signed byte +5).
+    fn silencer_on(&self) -> bool {
+        self.rd8(3) == SILENCER && (!crate::fanfix::on(43) || self.s8(5) >= 10)
+    }
+
     pub(super) fn launch(&self) {
         let slot = self.slot();
         // 1.
@@ -162,7 +168,7 @@ impl Ai {
         }
         // 7.
         if it < 17 {
-            if self.rd8(3) == SILENCER {
+            if self.silencer_on() {
                 let q = self.cdiv(100, self.sh_silencer(it) as i32 - 1);
                 let v = ((self.cdiv(100 - self.s8(5), q) + 1) as u8).wrapping_mul(10).wrapping_add(20);
                 self.call(op::SFX, &[0x17, SFX_CHANNEL, v.min(120) as i32, 1]);
@@ -235,7 +241,7 @@ impl Ai {
             let it = self.rd8(0x1F5);
             if it <= 0x0E {
                 let mut v = self.sh_silencer(it);
-                if self.rd8(3) == SILENCER {
+                if self.silencer_on() {
                     v = self.silenced(v);
                 }
                 let tile = s16(self.rd16(0x114) as i32);
@@ -400,18 +406,21 @@ impl Ai {
         let combat = unsafe { (*self.w).combat } as i8 as i32;
         self.call(op::EFFECT, &[t, self.rd8(0x1C9) as i32, f, r - 2000 * combat, self.slot(), 0]);
     }
-    /// "Explosive" of Projectile impact step 2.
-    fn explosive(&self, t: i32, x: i32, y: i32, hit: i32, it: u8, c: i32) {
+    /// "Explosive" of Projectile impact step 2. Returns the tile the caller's later steps use: `t`, or under fan
+    /// fix F52 the tile the landed item really went to (1.15m ProjectileImpact keeps LandItem's EAX in EDI).
+    fn explosive(&self, t: i32, x: i32, y: i32, hit: i32, it: u8, c: i32) -> i32 {
         let slot = self.slot();
         // SPEC GAP: Roll is evaluated where it is used (not when hit = −1; again for "then if Roll").
         if hit == -1 || self.roll_explode(c) {
             self.call(op::EXPLODE, &[slot, t, self.s8(0x1C9), hit]);
-            return;
+            return t;
         }
-        self.call(op::LAND_ITEM, &[slot, t, it as i32, c, x, y]);
+        let landed = self.call(op::LAND_ITEM, &[slot, t, it as i32, c, x, y]) as i32;
+        let t = if crate::fanfix::on(52) { s16(landed) } else { t };
         if self.roll_explode(c) {
             self.impact_effect(t);
         }
+        t
     }
     fn set_tile_effect(&self, t: i32) {
         unsafe { (*self.w).effect_tile = t as i16 };
@@ -457,7 +466,7 @@ impl Ai {
             // d.
             if self.rd8(0x1C9) != 0 {
                 if self.s8(0x1C9) > 1 {
-                    self.explosive(t, x, y, hit, it, c);
+                    let _ = self.explosive(t, x, y, hit, it, c);
                 } else {
                     let d = self.random(4) + 1;
                     self.call(op::TAKE_DAMAGE, &[o as i32, 2500, d, 1, slot, NONE_I]);
@@ -479,7 +488,7 @@ impl Ai {
         // a.
         if self.s8(0x1C9) > 0 {
             if self.s8(0x1C9) > 1 {
-                self.explosive(t, x, y, hit, it, c);
+                let t = self.explosive(t, x, y, hit, it, c);
                 if unsafe { (*self.w).combat } != 0 {
                     self.set_tile_effect(t);
                 }

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Differential test: the day cycle PlayLoop 0x4FB94, original vs port.
 
-usage: .venv/bin/python validate/diff/playloop_diff.py [ncases=120] [DUMP] [--lib SO]
+usage: .venv/bin/python validate/diff/playloop_diff.py [ncases=120] [DUMP] [--lib SO] [--fan 62]
+--fan 62 (#70 F62, row 72): the original runs the 1.15m PlayLoop bytes (DayEndScreen after an end code, rating + exit
+after a lost game; the DayEndScreen stub models cave 0x1EEC1: result = ESI when ESI != 0), the port fan fix F62.
 A case: EAX 0 (from the menu: the office first) or 1 (Continue: TacticalLoop(1) first), a list of OfficeScreen results (4 Sleep,
 7 Leave) and a list of TacticalLoop results (normal with end code 0..5; Restart; Abort; a mark byte that the tactical day writes
 into the world, so a later line shows which world copy came back). The original runs whole in Unicorn; every callee is a stub
@@ -21,11 +23,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 sys.path[:0] = [HERE, os.path.join(ROOT, "tools")]
 from emu import Emu, EmuStop  # noqa: E402
+from unicorn.x86_const import UC_X86_REG_ESI  # noqa: E402
 
 argv = sys.argv[1:]
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
-args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
+args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
+FAN = "--fan" in argv
 ncases = int(args[0]) if args else 120
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
 SAVE = os.path.join(ROOT, "build", "DAY_day3.SAV")
@@ -37,8 +41,12 @@ ISO, EXE = (os.path.join(ROOT, *p).encode() for p in (("rom", "JA1.gog"), ("buil
 PORT = ctypes.CDLL(LIB)
 PORT.ja1f_playloop_run.argtypes = [ctypes.c_char_p] * 4 + [ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p,
                                                            ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+PORT.ja1_fan_fixes_set.argtypes = [ctypes.c_uint64]
+PORT.ja1_fan_fixes_set((1 << 61) if FAN else 0)
 e = Emu(dump=dump, fast=True)
 rt = e.rt
+if FAN:
+    e.put_115m(only=[(0x4FC2F, 0x4FC31), (0x4FC47, 0x4FC50), (0x4FCCE, 0x4FCD0)])
 DAY, END, ABORT, RESTART, DIFF, LINK = 0x229FA4, 0x93449, 0x92E74, 0x92E75, 0x22A0CC, 0x22A043
 st = {}
 
@@ -96,7 +104,8 @@ def tactical(em, a, *_):
 
 def dayend(em, *_):
     log("dayend")
-    e.w8(rt(END), st["dayend"])
+    esi = e.uc.reg_read(UC_X86_REG_ESI) & 0xFF
+    e.w8(rt(END), esi if FAN and esi else st["dayend"])
 
 
 def quit_line(em, *_):
@@ -146,6 +155,9 @@ def directed(c):
         (0, [4], [N(0, 2)]), (0, [4], [N(0, 3)]), (0, [4], [N(0, 4)]),
         (1, [7], [N(m=5)]), (1, [4, 7], [(1, 0, 0, 5), N(m=6)]), (1, [7], [(2, 0, 0, 5)]), (1, [], [N(2)]),
     ]
+    if FAN:
+        # F62: an end code with a verdict that would end the game too (the end code wins).
+        table += [(0, [4], [N(1, 2)]), (0, [4], [N(2, 3)]), (0, [4], [N(4, 4)]), (0, [4], [N(5, 2)]), (1, [], [N(3, 4)])]
     if c < len(table):
         return table[c]
     tact, off = [], []
@@ -213,9 +225,9 @@ def run(c):
 for c in range(ncases):
     run(c)
 shutil.rmtree(tmp, ignore_errors=True)
-print(f"playloop_diff: {cases} cases, {bad} mismatches; lines {dict(sorted(seen.items()))}")
+print(f"playloop_diff{' --fan 62' if FAN else ''}: {cases} cases, {bad} mismatches; lines {dict(sorted(seen.items()))}")
 for w in ("office", "delete", "save", "sunrise", "strategic", "tactical", "load", "dayend", "show", "over", "new", "win", "exit", "return"):
-    if not seen.get(w):
+    if not seen.get(w) and not (FAN and w == "new"):  # F62: a lost game ends the program, no new game
         print(f"playloop_diff: step {w} never ran")
         bad += 1
 sys.exit(1 if bad else 0)

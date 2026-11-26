@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Differential test: the top strip buttons, 0x10398 (all up) and 0x10454 (shade), original vs port.
 
-usage: .venv/bin/python validate/diff/stripbuttons_diff.py [ncases=300] [DUMP] [--lib SO]
+usage: .venv/bin/python validate/diff/stripbuttons_diff.py [ncases=300] [DUMP] [--lib SO] [--fan 14 (#70 F14: 1.15m StopWalk, flag -1)]
 A case: noise in the panel buffer and the screen, a show flag, the redraw-off byte 0x92DDF. Up, or a shade with last 0x12..0x18
 (the callers pass 0x15 and 0x18; 0x12 = no button). The original runs in Unicorn with its real element draw 0x469F0, label
 0x35AB8 and shade 0x254F0. The port: strips::buttons_up / buttons_shade / buttons_copy (ja1f_strip_buttons).
@@ -19,7 +19,8 @@ from emu import Emu, EmuStop  # noqa: E402
 argv = sys.argv[1:]
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
-args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
+args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
+FAN = "--fan" in argv     # --fan 14 (#70 F14): the original runs the 1.15m StopWalk bytes, the port fan fix F14; flag -1 too
 ncases = int(args[0]) if args else 300
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
 if not os.path.exists(dump):
@@ -29,6 +30,10 @@ ISO, EXE = os.path.join(ROOT, "rom", "JA1.gog").encode(), os.path.join(ROOT, "bu
 PORT = ctypes.CDLL(LIB)
 PORT.ja1f_strip_buttons.argtypes = [ctypes.c_char_p, ctypes.c_char_p] + [ctypes.c_void_p] * 3 + [ctypes.c_int] * 3
 e = Emu(dump=dump, fast=True)
+if FAN:
+    e.put_115m(only=[(0x104D5, 0x104DE), (0x1053A, 0x1053B)])   # StopWalk: lea ecx,[edx+2] / jle / loopne
+    PORT.ja1_fan_fixes_set.argtypes = [ctypes.c_uint64]
+    PORT.ja1_fan_fixes_set(1 << 13)
 rt = e.rt
 P_PANEL, P_SCREEN, P_TABLE0, REDRAW_OFF = 0x93E60, 0x95678, 0xE8C48, 0x92DDF
 panel, screen, table0 = e.r32(rt(P_PANEL)), e.r32(rt(P_SCREEN)), e.r32(rt(P_TABLE0))
@@ -91,7 +96,7 @@ for c in range(max(30, ncases // 10)):
     e.w8(rt(SELECTED), sel), e.w8(rt(COMBAT), combat)
     for step in range(5):
         slot = r.choice((sel, sel, sel, (sel + 1) % 8, 8, 41))
-        flag = r.choice((0, 1, 1, 0x80))
+        flag = r.choice((0, 1, 1, 0x80, -1, -1) if FAN else (0, 1, 1, 0x80))
         rec = rt(0xFA958) + 0x200 * slot
         e.w8(rec + 0x17A, slot)
         e.call(rt(0x104C8), rec, flag, max_steps=8_000_000)
@@ -114,5 +119,5 @@ if 0 in walks.values():
     bad += 1
     print(f"stop_walk branches missing: {walks}")
 print(f"stop_walk: {walks}")
-print(f"stripbuttons_diff: {ncases} cases, {len(kinds)} kinds, {shown} copied to the screen, {bad} mismatches")
+print(f"stripbuttons_diff{' --fan 14' if FAN else ''}: {ncases} cases, {len(kinds)} kinds, {shown} copied to the screen, {bad} mismatches")
 sys.exit(1 if bad or not shown or len(kinds) < 7 else 0)

@@ -222,7 +222,7 @@ impl Default for Music {
             seqs: vec![],
             playing: -1,
             wanted: -1,
-            on: std::env::var("JA1_MUSIC").map(|v| v != "0").unwrap_or(true),
+            on: crate::config::read::music(std::env::var("JA1_MUSIC").ok().as_deref()),
             player: None,
             drv: None,
             opl: Opl::default(),

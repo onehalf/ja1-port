@@ -223,7 +223,7 @@ pub unsafe fn merc_message(w: *mut Ja1World, h: *const Ja1Host, slot: u8, how: i
     if how < 0 {
         ja1_time_compress(w, h, 0);
         *cry = Some(r[0x179]);
-        if (*w).opt_step_text != 0 {
+        if crate::ctlpanel::sub_byte((*w).opt_step_text) {
             *msg_box = Some(("Enemy spotted!".to_string(), 700));
         }
     } else {

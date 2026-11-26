@@ -225,6 +225,10 @@ pub fn mouse_save(at: (i32, i32)) {
 /// The mouse ops of a turn change (EndTurn? 0x121D8 + NewTurn? 0x126C8, InterruptTurn? 0x1304C): op 146 = MouseSetPos? 0x681D0
 /// to (x, y); op 147 = MouseSavePos2? 0x67E18: the place goes to `saved`; op 157 = MouseRestorePos2? 0x67E30: the mouse goes
 /// to `saved`. Some(place) = the mouse moves there.
+///
+/// The one place 0x229C40 also serves the view slide, ConfirmDialog, QuestionBox and the item box, so op 157 can send
+/// the pointer to where the last box or slide opened (#2 row 57). Port fix P19 (#71): op 157 of the turn code (NewTurn?
+/// 0x126E8 / 0x1298C / 0x12A44, InterruptTurn? 0x13150) leaves the pointer where it is.
 pub fn turn_mouse(op: i32, x: i32, y: i32, now: (i32, i32), saved: &mut (i32, i32)) -> Option<(i32, i32)> {
     match op {
         146 => Some((x, y)),
@@ -232,6 +236,7 @@ pub fn turn_mouse(op: i32, x: i32, y: i32, now: (i32, i32), saved: &mut (i32, i3
             *saved = now;
             None
         }
+        157 if ja1logic::fanfix::port_on(19) => None,
         157 => Some(*saved),
         _ => None,
     }
@@ -302,6 +307,23 @@ pub fn held_on_screen(iso: &str, exe: &str, w: &crate::world::World, buf: &mut [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #71 P19 (#2 row 57): at the turn change (op 157) the pointer goes to the place of the last save (here a box at
+    /// (200, 150)) in 1.13b; with the fix it stays where it is. The save (op 147) and the set (op 146) stay.
+    #[test]
+    fn the_turn_change_keeps_the_pointer_with_p19() {
+        let _lock = crate::sound::TEST_FIX_MASK.lock().unwrap_or_else(|e| e.into_inner());
+        let mask = ja1logic::fanfix::port_mask();
+        for (m, want) in [(0u64, Some((200, 150))), (1 << 18, None)] {
+            ja1logic::fanfix::port_set(m);
+            let mut saved = (0, 0);
+            assert_eq!(turn_mouse(147, 0, 0, (200, 150), &mut saved), None);
+            assert_eq!(turn_mouse(157, 0, 0, (40, 30), &mut saved), want);
+            assert_eq!(turn_mouse(146, 80, 8, (40, 30), &mut saved), Some((80, 8)));
+            assert_eq!(saved, (200, 150));
+        }
+        ja1logic::fanfix::port_set(mask);
+    }
 
     /// Ledger row c2aea50:ja1front:1611: on the map screens the arrow goes for a held item, a flipped pointer or the
     /// mouse over the map.

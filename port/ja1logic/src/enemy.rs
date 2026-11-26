@@ -283,7 +283,13 @@ pub(crate) fn enemy_move(w: *mut Ja1World, h: *const Ja1Host, src: u8) -> u8 {
                     if room < 1 {
                         continue;
                     }
-                    let f = (st(w, s, 0) & WALL[d] == 0 || story_sector(w, nb as u8)) as u8;
+                    // F16 (fan fix, #70 row 14; changelog 1.15z, found by DarzaR): the attack on the south processing
+                    // plant (sector 0x35, story byte 0x0D == 1) counts as an open side (1.15m EnemyMoves? 0x3EF76 +
+                    // cave 0x3E0CF), and the attackers' weight below takes the target sector (0x3F0A7 AL = BH).
+                    let fan16 = crate::fanfix::on(16);
+                    let f = (st(w, s, 0) & WALL[d] == 0
+                        || story_sector(w, nb as u8)
+                        || (fan16 && nb == 0x35 && story(w, 0x0D) as i8 == 1)) as u8;
                     let sv = ai.call(op::SECTOR_VALUE, &[nb & 0xFF, f as i32]) as i16;
                     if sv == -100 {
                         continue;
@@ -308,7 +314,7 @@ pub(crate) fn enemy_move(w: *mut Ja1World, h: *const Ja1Host, src: u8) -> u8 {
                             }
                             cnt = cnt.min(n);
                         }
-                        let att = (attack_weight(w, src, f) * cnt as i32
+                        let att = (attack_weight(w, if fan16 { nb as u8 } else { src }, f) * cnt as i32
                             + attack_weight(w, nb as u8, 1) * st(w, nb, 1) as i32) as i16 as i32;
                         if de + att == 0 {
                             if att == 0 || (att > 0) != (v0 > 0) {

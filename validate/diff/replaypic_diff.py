@@ -13,6 +13,8 @@ Cases k 4..7 = replay_anim 0 ReplayFlagAnim 0x64658 (EAX s, EDX mode 1 / 2, EBX 
 (EAX from, EDX a neighbour, EBX kind 1 / 2, the carry in 0x9562D), 3 ReplayBurnAnim 0x643F8 (EAX s, EDX mode),
 4 ReplayExplosionAnim 0x664FC (AL s); PlaySfxSlot 0x5CB34 and EscPressed? 0x67300 are stubs (0), the wait 0x67EEC
 adds to the wait total like 0x67250. The port: ja1f_replay_anim. Without --port only the original runs. Exits 1 on any mismatch.
+--pfix 14 (#71, #2 row 32): the original without the DrawMarkersTo call 0x64B5E of ReplayBattle, the port at fix level
+`all`; half the battle shows in sectors 0..2 (the only ones where the markers reach the flash).
 Then ncases // 10 battle shows (replay_anim 2, strategic.md "The battle show"): ReplayBattle 0x6494C (EAX s) with the
 show byte 0x963BC = 1 and Random 0x53538 a stub that draws from a seeded list; the screen at each wait is one frame.
 The port: ja1f_replay_seq with the 100 calls (2, s, j, b0, b1, b2) whose burst words this script makes from the same
@@ -29,11 +31,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
 sys.path[:0] = [HERE, os.path.join(ROOT, "tools")]
 from emu import Emu                  # noqa: E402
+import pfix                          # noqa: E402
 from unicorn.x86_const import UC_X86_REG_ESP    # noqa: E402
 from datarc import read, member      # noqa: E402
 from pcx import decode               # noqa: E402
 
 argv = sys.argv[1:]
+PFIX = pfix.parse(argv)
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
 args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
@@ -72,6 +76,14 @@ mapbuf = b"".join(dark[y * 320:(y + 1) * 320] + bright[y * 320:(y + 1) * 320] fo
 sheet = b"".join(flags[y * 330:(y + 1) * 330] + bytes(384 - 330) for y in range(48))
 
 e = Emu(dump=dump, fast=True)
+if PFIX:
+    class _FrontFixes:                    # the port side is libja1front: its own copy of the fix masks
+        @staticmethod
+        def port_fixes(m):
+            if PORT:
+                PORT.ja1_port_fixes_set.argtypes = [ctypes.c_uint64]
+                PORT.ja1_port_fixes_set(m)
+    pfix.apply(e, PFIX, _FrontFixes)
 screen, clean, mapp = e.r32(e.rt(SCREEN_P)), e.r32(e.rt(CLEAN_P)), e.r32(e.rt(MAPBUF_P))
 assert len({screen, clean, mapp}) == 3, "screen, clean map and map buffer overlap in the dump"
 e.uc.mem_write(mapp, mapbuf)
@@ -206,7 +218,7 @@ e.stub(e.rt(0x53538), lambda emu, n, *_: rands.pop(0) % max(n, 1) if rands else 
 snap = bytes(e.uc.mem_read(0, 16 << 20))
 for i in range(nb):
     tbl, _, _, scr, cln = fuzz(r)
-    s = [0, 1, 2][i] if i < 3 else r.randrange(60)
+    s = [0, 1, 2][i % 3] if i < 3 or (PFIX and i % 2) else r.randrange(60)   # --pfix 14: half in sectors 0..2
     vals = [r.randrange(1 << 15) for _ in range(400)]
     e.uc.mem_write(0, snap)
     e.uc.mem_write(e.rt(R), tbl)
@@ -424,5 +436,5 @@ for i in range(nanim + NMADE):
         fails += 1
         if fails <= 10:
             print(f"MISMATCH anim frames case {i} (k {k}, a {a}): {bad}")
-print(f"replaypic_diff{' (port)' if PORT else ''}: {ncases} cases + {nb} battle shows + {nd} death pictures + {ncell} map cells + {nanim} animations frame by frame + {NMADE} made tree cases, {fails} mismatches")
+print(f"replaypic_diff{' (port)' if PORT else ''}{' --pfix ' + ','.join(map(str, PFIX)) if PFIX else ''}: {ncases} cases + {nb} battle shows + {nd} death pictures + {ncell} map cells + {nanim} animations frame by frame + {NMADE} made tree cases, {fails} mismatches")
 sys.exit(1 if fails else 0)

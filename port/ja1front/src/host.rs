@@ -871,7 +871,7 @@ unsafe extern "C" fn cb_call(ctx: *mut c_void, op: i32, args: *const i32, nargs:
         Err(e) => {
             // "Any other op during the entry is an error: stop and name the op." Unwinding out of a C callback is
             // not possible, so the process stops here.
-            eprintln!("ja1front: sector entry stopped: {}", e);
+            eprintln!("ja1-port: sector entry stopped: {}", e);
             std::process::exit(1)
         }
     }

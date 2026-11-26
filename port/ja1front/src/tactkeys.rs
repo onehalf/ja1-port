@@ -42,6 +42,8 @@ pub struct Gates {
     pub in_play: bool,
     /// +0x183 of the selected merc, signed.
     pub hp: i8,
+    /// 0x92DD0 turn_moves: an enemy won an interrupt and waits in the queue (read only by port fix P21).
+    pub turn_moves: bool,
 }
 
 /// What one key press does.
@@ -115,6 +117,19 @@ impl Route {
     pub fn back(self) -> bool {
         matches!(self, Route::Options | Route::Abort | Route::EndTurn | Route::CursorBack | Route::Traverse)
     }
+
+    /// CursorItemBack? 0x53660 runs first, with fan fix F67 (#70 row 86; 1.15m caves 0x8AF43 / 0x8AF5B / 0x8AF70):
+    /// also before Quick Restore (Alt+R), Quick Save (Alt+S) and Exit to DOS (Alt+X), so a held item is in its
+    /// merc's pocket when the game saves or loads (changelog 1.15 jan 08, found by DarzaR).
+    pub fn back_fan(self, fan67: bool) -> bool {
+        self.back() || fan67 && matches!(self, Route::AskQuit | Route::QuickSave | Route::QuickRestore)
+    }
+
+    /// Fan fix F67: LoadStripPccs? 0x2F928 (1, 0) after the box of the key (1.15m caves 0x8AF11 Control Panel,
+    /// 0x8AF21 traverse, 0x8AF31 abort day, 0x8AF43 / 0x8AF5B / 0x8AF70 quick keys and Exit to DOS).
+    pub fn strip_reload(self, fan67: bool) -> bool {
+        fan67 && matches!(self, Route::Options | Route::Traverse | Route::Abort | Route::AskQuit | Route::QuickSave | Route::QuickRestore)
+    }
 }
 
 /// Key M's rule (0x13E68), also the rule of the guard screen way in the window.
@@ -178,7 +193,9 @@ fn plain(key: u8, g: &Gates) -> Route {
         b'A' => Route::Abort,
         b'C' if g.combat => Route::NoCompress,
         b'C' => Route::Compress,
-        b'D' if g.combat && g.drawn && g.turn_shown => Route::EndTurn,
+        // Port fix P21 (#71, #2 row 63): no EndTurn while an enemy interrupt waits (turn_moves 0x92DD0 != 0); in 1.13b
+        // EndTurn pops that enemy, leaves turn_moves = 1, and the enemies' turn stops for good after its shot.
+        b'D' if g.combat && g.drawn && g.turn_shown && !(g.turn_moves && ja1logic::fanfix::port_on(21)) => Route::EndTurn,
         b'D' => Route::CursorBack,
         b'I' if merc && g.in_play && may_act && g.hp >= 15 => Route::Inventory,
         b'L' => Route::SayAgain,
@@ -272,6 +289,7 @@ pub fn gates_of(w: &crate::world::World, paused: bool, quick_file: bool) -> Gate
         quick_file,
         in_play: rec.is_some_and(|r| w.soldiers[r + 0x138] != 0),
         hp: rec.map_or(0, |r| w.soldiers[r + 0x183] as i8),
+        turn_moves: w.update.turn_moves != 0,
     }
 }
 

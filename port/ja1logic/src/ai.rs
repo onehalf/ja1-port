@@ -739,6 +739,13 @@ pub mod op {
     pub const REPLAY_RECORD: i32 = 354;
     pub const REPLAY_ANIM: i32 = 355;
     pub const REPLAY_DRAW: i32 = 356;
+    /// SlideViewToTile? 0x3F578 (tile): only fan fix F15 calls it from the library.
+    pub const SLIDE_VIEW: i32 = 357;
+    /// DrawProjectilePass? 0x17548, its effect-record part (blast.rs effect_pass): the frame's pass and the one that
+    /// MercDies? runs through TacticalRedraw(1) (#70 row 30); arg = the count limit (0x13, overview 0x16). Library op.
+    pub const EFFECT_PASS: i32 = 358;
+    /// EffectHit? 0x173B4 (tile, kind, power) as effect_pass calls it. Library op.
+    pub const EFFECT_HIT: i32 = 359;
     // strategic.md Enemy moves:
     pub const ENEMY_WALK_IN: i32 = 329;
     pub const HOME_LOST_MSG: i32 = 330;
@@ -866,7 +873,7 @@ const TILES: usize = 3136;
 const SECTORS: usize = 80;
 const ITEM_TYPES: usize = 136;
 const NONE: u16 = 0xC41;
-const NO_SLOT: u8 = 0x40;
+pub(crate) const NO_SLOT: u8 = 0x40;
 const KIND_GUN: u8 = 0x92;
 const KIND_THROW: u8 = 0x95;
 const KIND_KNIFE: u8 = 0x96;
@@ -1071,8 +1078,11 @@ impl Ai {
     fn in_water(&self) -> bool {
         self.rd8(f::GROUND_UNDER) >= 0x6C && !matches!(self.rd8(f::OBJECT_UNDER), 0x1C | 0x1F)
     }
+    /// Gas on the own tile and no gas mask. Fan fix F43 (#70 row 93; 1.15m CalmAction 0x6DB37 / EngagedAction
+    /// 0x6EBB1 -> tails 0x8AD93 / 0x8AD80): the mask needs condition >= 10 (signed byte).
     fn in_gas(&self) -> bool {
-        self.tile_byte(self.own_tile(), 5) & 0x80 != 0 && self.item(3) != 0x28
+        self.tile_byte(self.own_tile(), 5) & 0x80 != 0
+            && (self.item(3) != 0x28 || (crate::fanfix::on(43) && (self.rd8(f::ITEMS + 3 * 12 + 2) as i8) < 10))
     }
     fn set_target(&self, t: u16) {
         self.wr16(f::AI_TARGET, t);
@@ -1222,6 +1232,8 @@ impl Ai {
                     | op::TAKE_PATCH
                     | op::TOGGLE_DOORS
                     | op::STORY_HIT
+                    | op::EFFECT_PASS
+                    | op::EFFECT_HIT
             );
         // host_ops bit 63 stands for op 63 and every higher op (port_api.md).
         let hbit = if opc < 0 { 0 } else { 1u64 << opc.min(63) };
@@ -1337,6 +1349,15 @@ impl Ai {
             blast::sector_tick(self.w, self.h);
             return 0;
         }
+        if lib && host_ops & hbit == 0 && opc == op::EFFECT_PASS {
+            blast::effect_pass(self.w, self.h, args.first().copied().unwrap_or(0x13));
+            return 0;
+        }
+        if lib && host_ops & hbit == 0 && opc == op::EFFECT_HIT {
+            let g = |k: usize| args.get(k).copied().unwrap_or(0);
+            blast::effect_hit_op(self.w, self.h, g(0), g(1), g(2) as u8 as i8);
+            return 0;
+        }
         if lib && host_ops & hbit == 0 && opc == op::EXPLODE {
             // combat.md Explosion, exact steps: op 90 explode (byte thrower, tile, int kind, int hit); the thrower
             // may be 0x40 and up (no soldier), so it does not take the slot path.
@@ -1391,8 +1412,7 @@ impl Ai {
         if lib && host_ops & hbit == 0 && opc == op::LAND_ITEM {
             // combat.md A thrown item lands, exact steps: op 176 (slot, tile, byte item, int condition, int x, int y).
             let g = |k: usize| args.get(k).copied().unwrap_or(0);
-            usetile::land_item(self.w, self.h, g(0), g(1), g(2) as u8, g(3), g(4), g(5));
-            return 0;
+            return usetile::land_item(self.w, self.h, g(0), g(1), g(2) as u8, g(3), g(4), g(5)) as u32;
         }
         if lib && host_ops & hbit == 0 && opc == op::PICKUP_HERE {
             // combat.md Picking up at the own tile, exact steps: op 73 (slot).
@@ -1727,6 +1747,11 @@ impl Ai {
             }
             if is_attack(code) {
                 self.call(op::FIRE, &[self.slot()]);
+                // #70 F36 (row 34): 1.15m AiThink 0x6D4DE jumps to 0x6D47A, which stores edx (0, the cdq of
+                // 0x6D48A) into 0x92DAC: turn-based mode ends after the shot forced by the action timeout.
+                if crate::fanfix::on(36) {
+                    unsafe { (*self.w).turn_based = 0 };
+                }
             } else {
                 self.wr8(f::AP_LEFT, 0);
                 self.wr8(f::TURN_DONE, 1);

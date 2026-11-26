@@ -1,6 +1,6 @@
 """Differential test: sector battles (strategic.md "Sector battles"; library ops 218 resolve_battle, 201 sector_gained).
 
-usage: .venv/bin/python validate/diff/battle_diff.py [ncases=3000] [DUMP] [--port] [--lib SO] [-v]
+usage: .venv/bin/python validate/diff/battle_diff.py [ncases=3000] [DUMP] [--port] [--lib SO] [--fan IDS] [-v]
 The original: ResolveSectorBattle 0x3E508 (byte s, byte f) or, one case in eight, SectorGained 0x3FA54 (s) runs in
 Unicorn on tac60. SetSectorOwned 0x3DDE4, the neighbours 0x404B4, SectorWorkable 0x41E1C, SectorConnectedToHome
 0x41178, the attack weight 0x3ECB4, RecalcTerritory 0x50EA8 and TimeCompress 0x11D40 run for real; sprintf_ is
@@ -16,6 +16,9 @@ mines +0xAF / +0xB0 of the sector, guard_skill, supplies[0], the story bytes of 
 the death counters and the gained / lost / last-gained accounts; s 0..59, f 0 / 1.
 --port: ja1_resolve_battle / ja1_sector_gained on the same state; the world and the log are compared. Exits 1 on any
 mismatch or when a listed path was never reached.
+--fan IDS (with --port; #70): the original side runs the 1.15m bytes of ResolveSectorBattle 0x3E54D..0x3E56B that fix
+F27 owns (LAST_KEY 0x95DC3 = 0 after the refresh; a write hook on that byte logs it as battle_ui kind 9), the port
+runs with the fan mask IDS ("all" = every fix).
 """
 import os, random, sys
 from collections import Counter
@@ -30,7 +33,15 @@ from unicorn.x86_const import UC_X86_REG_ESP   # noqa: E402
 argv = sys.argv[1:]
 if "--lib" in argv:
     os.environ["JA1_PORT_LIB"] = argv[argv.index("--lib") + 1]
-args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] != "--lib")]
+args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
+FAN = None
+if "--fan" in argv:
+    v = argv[argv.index("--fan") + 1]
+    FAN = (1 << 128) - 1 if v == "all" else sum(1 << (int(x.strip().lstrip("Ff")) - 1) for x in v.split(","))
+    if "--port" not in argv:
+        raise SystemExit("battle_diff: --fan needs --port")
+F27_ONLY = [(0x3E54D, 0x3E56B)]
+LAST_KEY = 0x95DC3
 N = int(args[0]) if args else 3000
 DUMP = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
 PORT = "--port" in argv
@@ -45,6 +56,10 @@ if not os.path.exists(DUMP):
     print(f"battle_diff: {DUMP} missing")
     sys.exit(1)
 e = Emu(dump=DUMP, fast=True)
+if FAN is not None:
+    e.put_115m(only=F27_ONLY)
+if PORT:
+    port_lib.fan_fixes(FAN or 0)
 rt = e.rt
 log, draws = [], []
 case = {"waits": []}
@@ -110,6 +125,10 @@ e.stub(rt(0x3FA04), lambda em, eax, edx, ebx, ecx: log.append(("replay", eax & 0
 e.stub(rt(0x1CB78), leaf("refresh"))
 e.stub(rt(0x67C54), leaf("mouse_wait"))
 e.stub(rt(0x67C68), leaf("mouse_release"))
+if FAN is not None:
+    from unicorn import UC_HOOK_MEM_WRITE
+    e.uc.hook_add(UC_HOOK_MEM_WRITE, lambda uc, acc, addr, size, val, ud: log.append(("bui", 9, val & 0xFF)),
+                  begin=rt(LAST_KEY), end=rt(LAST_KEY))
 
 
 def fuzz(r):
@@ -251,11 +270,13 @@ def main():
     need = ["battle", "gained", "guard falls", "tapper falls", "skip", "mouse_wait", "bbox"]
     need += [f"bui {k}" for k in range(9)] + [f"bmsg {t}" for t in range(6)]
     need += [f"replay {c:#x}" for c in (0x4D, 0x4E, 0x4F, 0x50, 0x52, 0x53, 0x54)]
+    if FAN is not None and FAN >> 26 & 1:
+        need.append("bui 9")
     missing = [k for k in need if not cover[k]]
     if missing:
         print(f"battle_diff: never reached: {missing}")
         fails += 1
-    print(f"battle_diff{' (port)' if PORT else ''}: {N} cases, {fails} mismatches")
+    print(f"battle_diff{' (port)' if PORT else ''}{f' --fan {FAN:#x}' if FAN is not None else ''}: {N} cases, {fails} mismatches")
     sys.exit(1 if fails else 0)
 
 

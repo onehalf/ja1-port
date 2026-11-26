@@ -166,7 +166,12 @@ impl Ctx {
                 self.op(XP_BEGIN, &[]);
                 let mut p = self.progress(k, stat);
                 let (off, lowest) = field(stat);
-                let v = self.si(k, off);
+                // Fan fix F03 (#70 row 13, #2 row 15; changelog 1.15z "In case a merc finish a day in incapacitated
+                // state (<15 HP), bug caused a wrong calculation of MaxHP", found by DarzaR). 1.13b clamps the
+                // health step against the current health (+0x183): a merc below 15 gains maximum health and loses
+                // his health progress. 1.15m (0x45C3D: +0x183 -> +0x184) clamps against the maximum health.
+                let f03 = stat == 1 && crate::fanfix::on(3);
+                let v = if f03 { self.si(k, HP_MAX) } else { self.si(k, off) };
                 let mut d;
                 if stat == 9 {
                     let (dd, pp) = Self::level_steps(v, p);
@@ -185,7 +190,16 @@ impl Ctx {
                     d = d as i16 as i32;
                 }
                 self.set_progress(k, stat, p);
-                if stat == 1 {
+                if f03 {
+                    // 1.15m 0x45F27..0x45F50 (signed bytes): floor = 15 - health; the count adds
+                    // max(max(healed, floor) + step, floor) to the health, so it ends at 15 or more.
+                    let floor = (lowest as u8).wrapping_sub(self.s(k, HP)) as i8;
+                    self.sput(k, HP_MAX, (self.si(k, HP_MAX) + d) as u8);
+                    let mut c = (self.s(k, HEALED) as i8).max(floor);
+                    self.sput(k, HEALED, 0);
+                    c = c.wrapping_add(d as u8 as i8).max(floor);
+                    d = c as i32;
+                } else if stat == 1 {
                     self.sput(k, HP_MAX, (self.si(k, HP_MAX) + d) as u8);
                     d = (d + self.s(k, HEALED) as i32) as i16 as i32;
                     self.sput(k, HEALED, 0);

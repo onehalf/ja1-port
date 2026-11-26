@@ -72,7 +72,10 @@ impl Ai {
         );
         // 3.
         if h < mh {
-            let lost = u8v(self.u8_of(r, f::HP_MAX) - self.u8_of(r, f::HP) - self.u8_of(r, WOUNDS)) / 2 + (mh - h);
+            // half = the bandaged part / 2. Fan fix F06 (#70 row 88, 1.15m switch HEALTHY, 1.15m 0x562AA -> 0x3C042):
+            // bandages lower the loss ("(mh - h) - half") instead of raising it.
+            let half = u8v(self.u8_of(r, f::HP_MAX) - self.u8_of(r, f::HP) - self.u8_of(r, WOUNDS)) / 2;
+            let lost = if crate::fanfix::on(6) { (mh - h) - half } else { half + (mh - h) };
             // s8 maxHealth × 3 can be 0: div_zero (op 47), quotient 0.
             let q = self.cdiv(ap * 2 * lost, mh * 3);
             ap = u8v(ap - q);

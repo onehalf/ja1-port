@@ -1,14 +1,14 @@
-//! `ja1front <JA1.gog> <JA.EXE> [sector] [--png OUT]`: the static tactical view (14 x 12 tiles) in a 4x window.
-//! `ja1front <JA1.gog> <JA.EXE> --world SAVE OUT`: the world from the files (docs/spec/world_load.md sections 1-3)
+//! `ja1-port <JA1.gog> <JA.EXE> [sector] [--png OUT]`: the static tactical view (14 x 12 tiles) in a 4x window.
+//! `ja1-port <JA1.gog> <JA.EXE> --world SAVE OUT`: the world from the files (docs/spec/world_load.md sections 1-3)
 //! written as the section 6 world image.
-//! `ja1front <JA1.gog> <JA.EXE> --enter SAVE SEED OUT`: load, enter the save's sector (section 4, the front-end as
+//! `ja1-port <JA1.gog> <JA.EXE> --enter SAVE SEED OUT`: load, enter the save's sector (section 4, the front-end as
 //! host: section 7), write the world image to OUT and print `seed S draws D`.
-//! `ja1front <JA1.gog> <JA.EXE> --play SAVE [SEED] [--png OUT]`: enter the sector and show it with its soldiers;
+//! `ja1-port <JA1.gog> <JA.EXE> --play SAVE [SEED] [--png OUT]`: enter the sector and show it with its soldiers;
 //! the window runs the sector (section 8: 10 ms ticks; per pass frame, update end, fuses; left click = shoot or
 //! walk, keys 1..8 = choose a merc, D = end turn, I = the inventory screen).
-//! `ja1front <JA1.gog> <JA.EXE> --walk SAVE SEED SLOT TILE TICKS OUT`: section 8 "Test command".
-//! `ja1front <JA1.gog> <JA.EXE> --script SAVE SEED SCRIPT OUT`: section 8 "Play script" (no window, no real time).
-//! `ja1front <JA1.gog> <JA.EXE> --save-copy SAVE OUT`: the world from the files, written at once as a day save
+//! `ja1-port <JA1.gog> <JA.EXE> --walk SAVE SEED SLOT TILE TICKS OUT`: section 8 "Test command".
+//! `ja1-port <JA1.gog> <JA.EXE> --script SAVE SEED SCRIPT OUT`: section 8 "Play script" (no window, no real time).
+//! `ja1-port <JA1.gog> <JA.EXE> --save-copy SAVE OUT`: the world from the files, written at once as a day save
 //! (section 10); OUT equals SAVE except the sector reset.
 //! `--png`, `--world`, `--enter`, `--walk` and `--script` need no SDL; the window needs the `gui` feature.
 use ja1front::mapui::BoxInput;
@@ -35,22 +35,24 @@ mod setupwin;
 use frame::Frame;
 
 fn usage() -> ! {
-    eprintln!("usage: ja1front <JA1.gog> <JA.EXE> [sector 1..60] [--png OUT]");
-    eprintln!("       ja1front <JA1.gog> <JA.EXE> --world SAVE OUT");
-    eprintln!("       ja1front <JA1.gog> <JA.EXE> --save-copy SAVE OUT");
-    eprintln!("       ja1front <JA1.gog> <JA.EXE> --new-game D Q OUT");
-    eprintln!("       ja1front <JA1.gog> <JA.EXE> --enter SAVE SEED OUT");
-    eprintln!("       ja1front <JA1.gog> <JA.EXE> --play SAVE [SEED] [--png OUT]");
-    eprintln!("       ja1front <JA1.gog> <JA.EXE> --walk SAVE SEED SLOT TILE TICKS OUT");
-    eprintln!("       ja1front <JA1.gog> <JA.EXE> --script SAVE|menu SEED SCRIPT OUT");
-    eprintln!("       ja1front <JA1.gog> <JA.EXE> --serve SAVE|menu SEED LOG OUT");
-    eprintln!("       ja1front <JA1.gog> <JA.EXE> --menu [SAVE_DIR]");
-    eprintln!("       ja1front <JA1.gog> <JA.EXE> --setup        (play settings in ja1.cfg, then the game)");
+    eprintln!("usage: ja1-port <JA1.gog> <JA.EXE> [sector 1..60] [--png OUT]");
+    eprintln!("       ja1-port <JA1.gog> <JA.EXE> --world SAVE OUT");
+    eprintln!("       ja1-port <JA1.gog> <JA.EXE> --save-copy SAVE OUT");
+    eprintln!("       ja1-port <JA1.gog> <JA.EXE> --new-game D Q OUT");
+    eprintln!("       ja1-port <JA1.gog> <JA.EXE> --enter SAVE SEED OUT");
+    eprintln!("       ja1-port <JA1.gog> <JA.EXE> --play SAVE [SEED] [--png OUT]");
+    eprintln!("       ja1-port <JA1.gog> <JA.EXE> --walk SAVE SEED SLOT TILE TICKS OUT");
+    eprintln!("       ja1-port <JA1.gog> <JA.EXE> --script SAVE|menu SEED SCRIPT OUT");
+    eprintln!("       ja1-port <JA1.gog> <JA.EXE> --serve SAVE|menu SEED LOG OUT");
+    eprintln!("       ja1-port <JA1.gog> <JA.EXE> --menu [SAVE_DIR]");
+    eprintln!("       ja1-port <JA1.gog> <JA.EXE> --setup        (play settings in ja1.cfg, then the game)");
+    eprintln!("       ja1-port                  (no arguments: the game found next to the program, main menu)");
+    eprintln!("       ja1-port --setup          (the setup screen of that game)");
     exit(2)
 }
 
 fn fail(what: &str, code: i32) -> ! {
-    eprintln!("ja1front: {} failed (error {})", what, code);
+    eprintln!("ja1-port: {} failed (error {})", what, code);
     exit(1)
 }
 
@@ -79,11 +81,11 @@ fn write_png_wh(path: &str, idx: &[u8], pal: &[u8; 768], w: u32, h: u32) -> std:
 /// `--world SAVE OUT`: load the world (no sector entry) and write its image.
 fn world(iso: &str, exe: &str, save: &str, out: &str) -> ! {
     let w = ja1front::world::World::load(iso, exe, save).unwrap_or_else(|e| {
-        eprintln!("ja1front: world: {}", e);
+        eprintln!("ja1-port: world: {}", e);
         exit(1)
     });
     std::fs::write(out, w.image()).unwrap_or_else(|e| {
-        eprintln!("ja1front: {}: {}", out, e);
+        eprintln!("ja1-port: {}: {}", out, e);
         exit(1)
     });
     exit(0)
@@ -184,7 +186,7 @@ fn find_file(dir: &std::path::Path, name: &str) -> Option<String> {
 
 /// No game files: the message on stderr and, with a window, in a message box (a double-click has no terminal).
 fn no_game(msg: String) -> ! {
-    eprintln!("ja1front: {}", msg);
+    eprintln!("ja1-port: {}", msg);
     #[cfg(feature = "gui")]
     {
         use sdl2::messagebox::{show_simple_message_box, MessageBoxFlag};
@@ -194,7 +196,7 @@ fn no_game(msg: String) -> ! {
 }
 
 fn die(msg: String) -> ! {
-    eprintln!("ja1front: {}", msg);
+    eprintln!("ja1-port: {}", msg);
     exit(1)
 }
 
@@ -1070,7 +1072,7 @@ fn script(iso: &str, exe: &str, save: &str, seed: u32, path: &str, out: &str, se
                 .unwrap_or_else(|c| fail("speech balloon", c));
             write_png_wh(&bp, &v[4], &pal, SW, SH).unwrap_or_else(|m| die(format!("{}: {}", bp, m)));
         } else if let (Ok(bp), Some((rec, q, t, nat))) = (std::env::var("JA1_BALLOON_PNG"), play.last_balloon.as_ref()) {
-            let (v, _) = ja1front::balloon::reaction_screens(iso, exe, rec, *q, *nat, wc.update.opt_step_text != 0, &idx)
+            let (v, _) = ja1front::balloon::reaction_screens(iso, exe, rec, *q, *nat, ja1front::ctlpanel::sub_byte(wc.update.opt_step_text), &idx)
                 .unwrap_or_else(|c| fail("speech balloon", c));
             write_png_wh(&bp, &v[4], &pal, SW, SH).unwrap_or_else(|m| die(format!("{}: {}", bp, m)));
             // PNG_text.png: the same wait with the mouse on the face (panel.md "Speech balloon" step 7: the weapon
@@ -1157,7 +1159,9 @@ fn main() {
     let mut menu_dir: Option<Option<String>> = None;
     // config.rs: `ISO EXE --setup` = the settings screen; every start reads ja1.cfg (an environment variable wins).
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
-    // No game paths (a double-click, or `ja1front --menu`): find the game folder, work in the program's folder.
+    // No game paths (a double-click, `ja1-port --setup` or `ja1-port --menu`): find the game folder, work in the
+    // program's folder. Insert #13506: a plain start (no arguments) is the game: title films, then the main menu
+    // (`--menu saves`). `ja1-port --setup` opens the setup screen.
     if argv.first().map_or(true, |a| a.starts_with("--")) {
         let (iso, exe) = find_game().unwrap_or_else(|m| no_game(m));
         if let Some(d) = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf())) {
@@ -1165,7 +1169,7 @@ fn main() {
         }
         let _ = std::fs::create_dir_all("saves");
         if argv.is_empty() {
-            argv.push("--setup".into());
+            argv.extend(["--menu".into(), "saves".into()]);
         }
         argv.splice(0..0, [iso, exe]);
     }
@@ -1177,6 +1181,22 @@ fn main() {
         setup(p[0], p[1]);
     }
     ja1front::config::load_into_env();
+    // #71: fixes (ja1.cfg) / JA1_FIXES = off (1.13b) | 1.15m (the #70 fan fixes) | all (+ the port fixes); old
+    // fan_fixes = 1 reads as 1.15m. JA1_FAN_FIXES (F ids, tests) replaces the F part when set.
+    let fixes = ja1front::config::read::fixes(std::env::var("JA1_FIXES").ok().as_deref());
+    let (mut f, p) = ja1logic::fanfix::parse_fixes(&fixes).unwrap_or_else(|e| die(e));
+    if let Ok(v) = std::env::var("JA1_FAN_FIXES") {
+        f = ja1logic::fanfix::parse(&v).unwrap_or_else(|e| die(e));
+    }
+    ja1logic::fanfix::set(f);
+    ja1logic::fanfix::port_set(p);
+    ja1front::sound::start_volumes();
+    if f != 0 || std::env::var("JA1_FAN_FIXES").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("on")) {
+        eprintln!("fan fixes on (mask {:#x})", f);
+    }
+    if p != 0 {
+        eprintln!("port fixes on (mask {:#x})", p);
+    }
     let mut args = argv.into_iter();
     while let Some(a) = args.next() {
         if a == "--png" {
@@ -1456,8 +1476,13 @@ fn main() {
         if pos.len() != 2 || png_out.is_some() {
             usage();
         }
-        // world_load.md section 11 test command: the new game's day save.
-        let w = ja1front::world::World::new_game(&iso, &exe, d, q).unwrap_or_else(|e| die(format!("world: {}", e)));
+        // world_load.md section 11 test command: the new game's day save. JA1_NEW_GAME_OLD=SAVE: the new game after
+        // the game in that day save (new_game_after; newgame_diff --fan 31).
+        let old = std::env::var("JA1_NEW_GAME_OLD").ok().filter(|v| !v.is_empty()).map(|v| {
+            ja1front::world::World::load(&iso, &exe, &v).unwrap_or_else(|e| die(format!("{}: {}", v, e)))
+        });
+        let w = ja1front::world::World::new_game_after(&iso, &exe, d, q, old.as_ref())
+            .unwrap_or_else(|e| die(format!("world: {}", e)));
         std::fs::write(&out, w.save_bytes()).unwrap_or_else(|e| die(format!("{}: {}", out, e)));
         exit(0);
     }
@@ -1498,7 +1523,7 @@ fn main() {
     if let Some(out) = png_out {
         let (idx, pal) = frame(&iso, &exe, sector, 0, 0);
         write_png(&out, &idx, &pal).unwrap_or_else(|e| {
-            eprintln!("ja1front: {}: {}", out, e);
+            eprintln!("ja1-port: {}: {}", out, e);
             exit(1)
         });
         return;
@@ -1514,7 +1539,7 @@ fn setup(iso: &str, exe: &str) -> ! {
 
 #[cfg(not(feature = "gui"))]
 fn setup(_iso: &str, _exe: &str) -> ! {
-    eprintln!("ja1front: built without the gui feature: no --setup");
+    eprintln!("ja1-port: built without the gui feature: no --setup");
     exit(2)
 }
 
@@ -1523,13 +1548,13 @@ type Draw<'a> = dyn FnMut(i32, i32, i32) -> (Vec<u8>, [u8; 768]) + 'a;
 #[cfg(not(feature = "gui"))]
 #[allow(clippy::too_many_arguments)]
 fn play_window(_iso: &str, _exe: &str, _title: &str, _e: &mut ja1front::enter::Entered, _screen: &mut ja1front::screen::Screen, _pal: &[u8; 768], _c0: i32, _r0: i32, _save_dir: Option<std::path::PathBuf>) {
-    eprintln!("ja1front: built without the gui feature: use --play SAVE [SEED] --png OUT, --walk or --script");
+    eprintln!("ja1-port: built without the gui feature: use --play SAVE [SEED] --png OUT, --walk or --script");
     exit(2)
 }
 
 #[cfg(not(feature = "gui"))]
 fn window(_title: &str, _draw: &mut Draw, _sector: i32, _c0: i32, _r0: i32, _sectors: bool) {
-    eprintln!("ja1front: built without the gui feature: use --png OUT, --world or --enter");
+    eprintln!("ja1-port: built without the gui feature: use --png OUT, --world or --enter");
     exit(2)
 }
 
@@ -1538,7 +1563,7 @@ fn window(_title: &str, _draw: &mut Draw, _sector: i32, _c0: i32, _r0: i32, _sec
 fn window(title: &str, draw: &mut Draw, mut sector: i32, mut c0: i32, mut r0: i32, sectors: bool) {
 
     let sdl = sdl2::init().unwrap_or_else(|e| {
-        eprintln!("ja1front: SDL: {}", e);
+        eprintln!("ja1-port: SDL: {}", e);
         exit(1)
     });
     let video = sdl.video().expect("SDL video");
@@ -1989,7 +2014,7 @@ fn record_frame(idx: &[u8], pal: &[u8; 768]) {
 /// shoot or walk, keys 1..8 = choose a merc, D = end turn, arrow keys move the view.
 #[cfg(not(feature = "gui"))]
 fn menu_window(_iso: &str, _exe: &str, _dir: Option<std::path::PathBuf>) -> ! {
-    eprintln!("ja1front: built without the gui feature: use --script menu SEED SCRIPT OUT");
+    eprintln!("ja1-port: built without the gui feature: use --script menu SEED SCRIPT OUT");
     exit(2)
 }
 
@@ -2102,8 +2127,8 @@ fn menu_loop(iso: &str, exe: &str, dir: Option<std::path::PathBuf>, g: Gfx, worl
         let start = ja1front::startup::START;
         pointer_visible(!start.pointer_off);
         // config.rs title_films = off (JA1_TITLE_FILMS=0, port option): no films; the mouse start stays.
-        if std::env::var("JA1_TITLE_FILMS").map_or(true, |v| v != "0") {
-            title_window(iso, exe, ja1front::world::World::program_start_subtitles(exe), &mut g.canvas, &mut tex, &mut g.events);
+        if ja1front::config::read::title_films(std::env::var("JA1_TITLE_FILMS").ok().as_deref()) {
+            title_window(iso, exe, ja1front::ctlpanel::sub_byte(ja1front::world::World::program_start_subtitles(exe) as u8), &mut g.canvas, &mut tex, &mut g.events);
         } else {
             eprintln!("title films off");
         }
@@ -2160,8 +2185,14 @@ fn menu_loop(iso: &str, exe: &str, dir: Option<std::path::PathBuf>, g: Gfx, worl
                 for l in m.lines.drain(..) {
                     eprintln!("{}", l);
                 }
-                if std::mem::take(&mut m.intro) {
-                    let sub = world.as_ref().map_or_else(|| ja1front::world::World::program_start_subtitles(exe), |w| w.update.opt_step_text != 0);
+                // Insert #13553: config.rs intro = off (JA1_INTRO=0) skips the film; START NEW GAME goes on to Set
+                // Difficulty with the same fades and pointer shape 202.
+                let film = std::mem::take(&mut m.intro);
+                if film && !ja1front::config::read::intro(std::env::var("JA1_INTRO").ok().as_deref()) {
+                    eprintln!("intro off");
+                    pointer_shape(202);
+                } else if film {
+                    let sub = world.as_ref().map_or_else(|| ja1front::ctlpanel::sub_byte(ja1front::world::World::program_start_subtitles(exe) as u8), |w| ja1front::ctlpanel::sub_byte(w.update.opt_step_text));
                     intro_window(iso, exe, sub, &mut g.canvas, &mut tex, &mut g.events);
                     keys.clear();
                     // panel.md "The mouse pointer": shape 202 after the intro (Set Difficulty, Set Quick-Save Mode)
@@ -2263,7 +2294,7 @@ struct Gfx {
 #[cfg(feature = "gui")]
 fn muted() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("JA1_MUTE_UNFOCUSED").is_ok_and(|v| v == "1"))
+    *ON.get_or_init(|| ja1front::config::read::mute_when_away(std::env::var("JA1_MUTE_UNFOCUSED").ok().as_deref()))
         && unsafe { sdl2::sys::SDL_GetKeyboardFocus() }.is_null()
 }
 
@@ -2834,7 +2865,7 @@ fn show_balloons(iso: &str, exe: &str, e: &mut ja1front::enter::Entered, screen:
         let (mut v, wait) = match &who {
             Some((rec, q, _, nat, _, _)) => {
                 eprintln!("balloon {} {}{}", rec[0x17A], if *nat { "nat " } else { "" }, q);
-                ja1front::balloon::reaction_screens(iso, exe, rec, *q as i32, *nat, e.world.update.opt_step_text != 0, &idx)
+                ja1front::balloon::reaction_screens(iso, exe, rec, *q as i32, *nat, ja1front::ctlpanel::sub_byte(e.world.update.opt_step_text), &idx)
             }
             None => {
                 eprintln!("balloon santino");
@@ -2894,7 +2925,7 @@ fn show_balloons(iso: &str, exe: &str, e: &mut ja1front::enter::Entered, screen:
             // 800 ms after the voice (or the text time) ends (live, #2: voice end -> combat end 1.08 s at the last enemy's
             // death). SantinoSpeech? passes 0.
             let hold = if who.is_some() { 800 } else { 0 };
-            let rules = ja1front::faceanim::WaitRules { text_ms: ms as i64, voiced, hold, subtitles: e.world.update.opt_step_text != 0,
+            let rules = ja1front::faceanim::WaitRules { text_ms: ms as i64, voiced, hold, subtitles: ja1front::ctlpanel::sub_byte(e.world.update.opt_step_text),
                                                         has_text: !wtext.is_empty() };
             let mut wait_rules = face.take().map(|wf| ja1front::faceanim::SpeechWait::new(wf, rules));
             let mut cur = f.clone();
@@ -3155,7 +3186,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                 let (c0, r0) = ja1front::enter::view_tile(&(*ep).world);
                 for (op, a) in std::mem::take(&mut (*plp).host.guide_said) {
                     let idx = play_frame(&iso_sc, &exe_sc, &mut *ep, &mut *sp, c0, r0, &mut *plp, false);
-                    if !guide_balloon(&iso_sc, &exe_sc, op, &a, (*ep).world.update.opt_step_text != 0, &idx, &*pp, &mut *cv, &mut *tx, &mut *ev) {
+                    if !guide_balloon(&iso_sc, &exe_sc, op, &a, ja1front::ctlpanel::sub_byte((*ep).world.update.opt_step_text), &idx, &*pp, &mut *cv, &mut *tx, &mut *ev) {
                         (*plp).host.scene_closed = true;
                         return;
                     }
@@ -3217,7 +3248,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                 // #36 B: YesNoPrompt 0x28C84 calls ShowMouse (0x673AC) before its wait, so the game pointer shows
                 // in the box; the tactical map hides the system pointer (the tile cursor shows the mouse there).
                 pointer_visible(true);
-                prompt_mouse(&*cv, &*ev, ja1front::ctlpanel::get(&(*ep).world, 5) != 0);
+                prompt_mouse(&*cv, &*ev, ja1front::ctlpanel::subtitles(&(*ep).world));
                 question_loop(&mut *cv, &mut *tx, &mut *ev, &imgs, &*pp, None)
             }
         }));
@@ -3627,8 +3658,13 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                     }
                     let route = tactkeys::route(first, second, &g);
                     eprintln!("window key {:#x} {:#x} route {:?}", first, second, route);
-                    if route.back() {
+                    let fan67 = ja1logic::fanfix::on(67);
+                    if route.back_fan(fan67) {
                         ja1front::play::Session::new(&mut e.world, &mut play.host).cursor_back();
+                    }
+                    if route.strip_reload(fan67) {
+                        // F67: the strip reload after the box ends a squad lost shade (strips.rs).
+                        ja1front::strips::clear_lost_shade();
                     }
                     match route {
                         Route::None => {}
@@ -3908,7 +3944,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
             if quotes_wait(&said) {
                 let base = map.shown().to_vec();
                 for (op, a) in said {
-                    let sub = e.world.update.opt_step_text != 0;
+                    let sub = ja1front::ctlpanel::sub_byte(e.world.update.opt_step_text);
                     if op == 328 {
                         let under = map.fire_base.take().unwrap_or_else(|| base.clone());
                         let p = a.get(3).copied().unwrap_or(0);
@@ -4144,7 +4180,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                 eprintln!("guide offer asks (profile {})", p);
                 // SAFETY: as for the day start question below (day_steps runs inside this round of the loop).
                 unsafe {
-                    prompt_mouse(&*cv, &*ev, ja1front::ctlpanel::get(&*gw, 5) != 0);
+                    prompt_mouse(&*cv, &*ev, ja1front::ctlpanel::subtitles(&*gw));
                     question_loop(&mut *cv, &mut *tx, &mut *ev, &imgs, &mpal, None)
                 }
             }));
@@ -4369,7 +4405,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                 let imgs: Vec<Vec<u8>> = [None, Some(0), Some(1)].into_iter()
                     .map(|pr| map.payday_ask_img(w, &under, k.clamp(0, 7) as usize, family, pr).unwrap_or_else(|c| fail("map", c)))
                     .collect();
-                prompt_mouse(cv, ev, ja1front::ctlpanel::get(w, 5) != 0);
+                prompt_mouse(cv, ev, ja1front::ctlpanel::subtitles(w));
                 question_loop(cv, tx, ev, &imgs, &dpal, None)
             }));
             let cmouse = sdl.mouse();
@@ -4515,7 +4551,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                                     Event::KeyDown { keycode: Some(Keycode::L), .. } => {
                                         if let Ok(Some((k, _))) = o.ledger_again(&oiso, &oexe, w) {
                                             eprintln!("office ledger again {}", k);
-                                            if let Some((x, y)) = ja1front::question::prompt_warp(ja1front::ctlpanel::get(w, 5) != 0, mouse) {
+                                            if let Some((x, y)) = ja1front::question::prompt_warp(ja1front::ctlpanel::subtitles(w), mouse) {
                                                 warp_frame(&cv.window().subsystem().sdl().mouse(), cv, x, y);
                                                 eprintln!("prompt mouse {} {}", x, y);
                                             }
@@ -4724,7 +4760,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                                         let p = fa.get(3).copied().unwrap_or(0);
                                         let pr = w.profiles.get(p as usize * 0x5A..p as usize * 0x5A + 10).unwrap_or(&[]);
                                         let nick: Vec<u8> = pr.iter().copied().take_while(|&b| b != 0).collect();
-                                        let sub = w.update.opt_step_text != 0;
+                                        let sub = ja1front::ctlpanel::sub_byte(w.update.opt_step_text);
                                         if !fire_balloon(&oiso, &oexe, fa, &nick, sub, under, &a.pal, cv, tx, ev) {
                                             return 1;
                                         }
@@ -4808,7 +4844,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                 play.host.guide_say = Some(Box::new(move |op, a, under: Option<(&[u8], &[u8; 768])>| {
                     // SAFETY: as for the day start question below (day_steps runs inside this round of the loop).
                     let (map, w, cv, tx, ev) = unsafe { (&mut *mpm, &*wp, &mut *cv, &mut *tx, &mut *ev) };
-                    let sub = w.update.opt_step_text != 0;
+                    let sub = ja1front::ctlpanel::sub_byte(w.update.opt_step_text);
                     // DayEndBankrupt? 0x62304 speaks after the payroll wait, before the fade at 0x65F9C: GuideSpeech?
                     // saves and restores the payroll screen under its balloon (POSTPAN palette), not the island map.
                     // DayEndVerdict 0x60756 speaks over the day replay screen in its own palette (`quote_under`).
@@ -4863,11 +4899,17 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                         (se.win_vars(), se.performance_rating())
                     };
                     let t = ja1front::ending::rating_text(score);
-                    win_window(iso, exe, e.world.update.opt_step_text != 0, v, &t, &mut canvas, &mut tex, &mut events);
+                    win_window(iso, exe, ja1front::ctlpanel::sub_byte(e.world.update.opt_step_text), v, &t, &mut canvas, &mut tex, &mut events);
                     println!("{}", t);
                     exit(0);
                 }
-                end_window(iso, exe, e.world.update.opt_step_text != 0, r, &mut canvas, &mut tex, &mut events);
+                end_window(iso, exe, ja1front::ctlpanel::sub_byte(e.world.update.opt_step_text), r, &mut canvas, &mut tex, &mut events);
+                if ja1logic::fanfix::on(62) {
+                    // Fan fix F62 (#70 row 72): after the game-over screen, the rating text; the program ends.
+                    let score = ja1front::play::Session::new(&mut e.world, &mut play.host).performance_rating();
+                    println!("{}", ja1front::ending::rating_text(score));
+                    exit(0);
+                }
                 e.world = ja1front::ending::new_game_after(iso, exe, &e.world).unwrap_or_else(|m| die(format!("new game: {}", m)));
                 ja1front::sound::screen_main(iso, exe);
                 to_menu = true;
@@ -4886,7 +4928,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                 map.redraw(&e.world).unwrap_or_else(|c| fail("map", c));
                 let base = map.img.clone();
                 for (op, a) in said {
-                    let sub = e.world.update.opt_step_text != 0;
+                    let sub = ja1front::ctlpanel::sub_byte(e.world.update.opt_step_text);
                     if op == 328 {
                         let under = map.fire_base.take().unwrap_or_else(|| base.clone());
                         let p = a.get(3).copied().unwrap_or(0);
@@ -5018,7 +5060,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
         }
         if open_inv {
             // Section 8 "Inventory screen": the game stops while it is open (its op 228 Lock, panel.md "Other users of
-            // Lock"); the time meanwhile runs as locked ticks when it closes.
+            // Lock"); the time meanwhile runs as locked ticks when it closes (fan fix F65: as round_lock2 ticks).
             let ms = events.mouse_state();
             let mouse = screen_pixel(&canvas, ms.x(), ms.y());
             let mut input = WinInput { sdl_mouse: sdl.mouse(), canvas: &mut canvas, tex: &mut tex, events: &mut events, pal: &pal, buttons: 0, release: 0, mouse,
@@ -5031,7 +5073,9 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
             }
             inputs.clear();
             let now = ja1front::dostime::game_ticks(start.elapsed());
-            play.locked_ticks(&mut e.world, false, now.saturating_sub(ticks_done), false);
+            // 1.13b: the time after the first message box in the screen is plain time (play.rs inv_ticks).
+            let open_from = play.host.inv_box_end.take().map_or(now, |t| ja1front::dostime::game_ticks(t.saturating_duration_since(start)).max(ticks_done).min(now));
+            play.inv_ticks(&mut e.world, open_from.saturating_sub(ticks_done), now - open_from);
             ticks_done = now;
         }
         if let Some(mut g) = map.guard_take_closing() {
@@ -5269,6 +5313,18 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                 let (cm, am) = (ms.intersects(M::LCTRLMOD | M::RCTRLMOD), play.shift_alt.1);
                 let old = play.cursor.mode;
                 play.key_flags = play.shift_alt.0 as u16 | (cm as u16) << 2 | (am as u16) << 3;
+                // Port option (2026-11-25): a released pointer outside the focused window keeps the edge scroll.
+                play.edge_out = None;
+                let win = canvas.window();
+                let focus = win.window_flags() & sdl2::sys::SDL_WindowFlags::SDL_WINDOW_INPUT_FOCUS as u32 != 0;
+                if play.mouse_out && focus && !frame::dos_captured() {
+                    let (mut gx, mut gy) = (0, 0);
+                    unsafe { sdl2::sys::SDL_GetGlobalMouseState(&mut gx, &mut gy) };
+                    let ((wx, wy), (ww, wh)) = (win.position(), win.size());
+                    if let Some((x, y)) = ja1front::dosmouse::outside_edge((wx, wy, ww, wh), (gx, gy)) {
+                        play.edge_out = Some(screen_pixel(&canvas, x, y));
+                    }
+                }
                 play.pass(&mut e.world, &inputs, n as u32);
                 // The ticks of the balloons that waited inside the pass (balloon_win).
                 play.host.balloon_shown = false;
@@ -5295,7 +5351,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
             if (e.world.view_x, e.world.view_y, e.world.opt_onscreen) != view0 {
                 (c0, r0) = ja1front::enter::view_tile(&e.world);
                 let (mx, my) = play.mouse_px;
-                let at_edge = !play.mouse_out && (mx < 1 || mx > 318 || my < 1 || my > 198);
+                let at_edge = play.edge_out.is_some() || (!play.mouse_out && (mx < 1 || mx > 318 || my < 1 || my > 198));
                 if at_edge || inputs.iter().any(|i| matches!(i, Input::Arrow(_))) {
                     eprintln!("window scroll x {} y {}", e.world.view_x, e.world.view_y);
                 }
@@ -5415,7 +5471,9 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
             if !show.is_empty() {
                 // At the end of a sector (the Leave path faded the screen out first) the palette stays black: only
                 // the sounds and the waits of the show come through.
-                let dark = play.left;
+                // Fan fix F28: the leave path's fade waits for the show (fade_held): the show is lit, then it fades.
+                let held = play.host.fade_held.take();
+                let dark = play.left && held.is_none();
                 let black = [0u8; 768];
                 let show_pal = if dark { &black } else { &pal };
                 eprintln!("window battle {} steps{}", show.len(), if dark { " dark" } else { "" });
@@ -5432,6 +5490,10 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                             0
                         }
                         ja1front::play::BattleEv::WaitSound => 0,
+                        ja1front::play::BattleEv::ClearKey => {
+                            LAST_KEY.with(|v| v.set(0));
+                            0
+                        }
                         ja1front::play::BattleEv::Wait(ms) => ms as u64,
                         ja1front::play::BattleEv::Box(s, en, g, t, k) => {
                             shown_box = base.clone();
@@ -5466,6 +5528,10 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                     }
                 }
                 eprintln!("window battle end");
+                if let (Some((n, from, to)), Some(f)) = (held, play.host.fade_win.as_mut()) {
+                    last_frame.clone_from(&shown_box);
+                    f(n, from, to);
+                }
                 let now = ja1front::dostime::game_ticks(start.elapsed());
                 play.locked_ticks(&mut e.world, false, now.saturating_sub(ticks_done), false);
                 ticks_done = now;
@@ -5582,7 +5648,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
                 let shown = ja1front::balloon::say_again(iso, exe, &e.world, "PANEL_P.PCC", &base).unwrap_or_else(|c| fail("say again", c));
                 eprintln!("window again {:?}", e.world.last_quote);
                 if let Some((img, _)) = shown {
-                    prompt_mouse(&canvas, &events, ja1front::ctlpanel::get(&e.world, 5) != 0);
+                    prompt_mouse(&canvas, &events, ja1front::ctlpanel::subtitles(&e.world));
                     blit(&mut tex, &img, &pal, SW, SH);
                     canvas.copy(&tex, None, None).expect("copy");
                     canvas.present();
@@ -5766,7 +5832,7 @@ fn play_window(iso: &str, exe: &str, title: &str, e: &mut ja1front::enter::Enter
             // tactical screen.
             for (op, a) in std::mem::take(&mut play.host.guide_said) {
                 let idx = play_frame(iso, exe, e, screen, c0, r0, &mut play, false);
-                if !guide_balloon(iso, exe, op, &a, e.world.update.opt_step_text != 0, &idx, &pal, &mut canvas, &mut tex, &mut events) {
+                if !guide_balloon(iso, exe, op, &a, ja1front::ctlpanel::sub_byte(e.world.update.opt_step_text), &idx, &pal, &mut canvas, &mut tex, &mut events) {
                     break 'outer;
                 }
                 ticks_done = ja1front::dostime::game_ticks(start.elapsed());
@@ -6679,7 +6745,7 @@ impl ja1front::dayend::Host for DayEndWin<'_> {
         match ja1front::balloon::say_again(self.iso, self.exe, self.w, "PANEL_P.PCC", &self.s) {
             Ok(Some((img, _))) => {
                 eprintln!("day-end again");
-                prompt_mouse(self.cv, self.ev, ja1front::ctlpanel::get(self.w, 5) != 0);
+                prompt_mouse(self.cv, self.ev, ja1front::ctlpanel::subtitles(self.w));
                 blit(self.tx, &img, &self.pal, SW, SH);
                 self.cv.copy(self.tx, None, None).expect("copy");
                 self.cv.present();
@@ -6738,7 +6804,7 @@ impl ja1front::dayend::Host for DayEndWin<'_> {
         let imgs = self.map.payroll_fire_imgs(self.w, k, &self.s).unwrap_or_else(|c| fail("payroll", c));
         eprintln!("day-end ask fire {}", k);
         let pal = self.pal;
-        prompt_mouse(self.cv, self.ev, ja1front::ctlpanel::get(self.w, 5) != 0);
+        prompt_mouse(self.cv, self.ev, ja1front::ctlpanel::subtitles(self.w));
         let yes = question_loop(self.cv, self.tx, self.ev, &imgs, &pal, None);
         if !yes {
             eprintln!("day-end fire {} no", k);
@@ -6748,7 +6814,7 @@ impl ja1front::dayend::Host for DayEndWin<'_> {
         yes
     }
     fn subtitles(&self) -> bool {
-        ja1front::ctlpanel::get(self.w, 5) != 0
+        ja1front::ctlpanel::subtitles(self.w)
     }
     fn close_question(&mut self) {
         self.question = None;
@@ -6756,7 +6822,7 @@ impl ja1front::dayend::Host for DayEndWin<'_> {
     fn fire(&mut self, k: usize) {
         let nick: Vec<u8> = self.w.soldiers[k * 0x200 + 0x16E..k * 0x200 + 0x177].iter()
             .copied().take_while(|&c| c != 0).collect();
-        let sub = ja1front::ctlpanel::get(self.w, 5) != 0;
+        let sub = ja1front::ctlpanel::subtitles(self.w);
         let said = self.map.payroll_fire(self.w, k);
         eprintln!("day-end fire {}", k);
         eprintln!("day-end quote over the question {}", self.question.is_some() as u8);

@@ -19,6 +19,8 @@ from pcx import decode, png          # noqa: E402
 argv = sys.argv[1:]
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
+import pfix                       # noqa: E402  #71 --pfix IDS (P04): the map column cap on both sides
+PFIX = pfix.parse(argv)
 args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
 ncases = int(args[0]) if args else 200
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
@@ -117,6 +119,14 @@ for i in range(ncases):
 # the mouse: sector under the mouse 0x41410 (its number drawing 0x35F64 stubbed) for every point of the map part,
 # and the frame 0x4147C (sound stubbed) of every sector in the three colours, on the case 0 picture
 e.uc.mem_write(0, snap)
+if PFIX is not None:
+
+    class _FrontFixes:              # the port side is libja1front: its own copy of the fix masks
+        @staticmethod
+        def port_fixes(m):
+            PORT.ja1_port_fixes_set.argtypes = [ctypes.c_uint64]
+            PORT.ja1_port_fixes_set(m)
+    pfix.apply(e, PFIX, _FrontFixes)
 e.stub(e.rt(0x35F64), lambda *_: 0)
 e.stub(e.rt(0x5CB34), lambda *_: 0)
 mouse_bad = frame_bad = 0

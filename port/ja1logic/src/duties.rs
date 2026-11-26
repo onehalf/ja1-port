@@ -22,6 +22,7 @@ const WISDOM: usize = 0x18D;
 const MEDICAL: usize = 0x18E;
 const MECHANICAL: usize = 0x190;
 const MARKSMANSHIP: usize = 0x191;
+const EXPLOSIVES: usize = 0x18F;
 const LEVEL: usize = 0x192;
 const TRAIN_WHAT: usize = 0x199;
 const HEALED: usize = 0x19A;
@@ -284,7 +285,10 @@ impl Ctx {
             1 => self.practice(k, 5, amt(MEDICAL, 12), 1),
             3 => self.practice(k, 7, amt(MECHANICAL, 12), 1),
             4 => self.practice(k, 8, amt(MARKSMANSHIP, 12), 1),
-            2 => self.practice(k, 6, amt(LEVEL, 12), 1),
+            // 1.13b: the explosives practice count comes from the experience level (#2 row 14). Fan fix F02 (#70;
+            // changelog 1.15z "Fixed Explosives training's erroneous use of ExpLevel value", found by DarzaR;
+            // 1.15m 0x4B614: +0x192 -> +0x18F) takes it from the explosives skill.
+            2 => self.practice(k, 6, amt(if crate::fanfix::on(2) { EXPLOSIVES } else { LEVEL }, 12), 1),
             _ => {}
         }
     }

@@ -145,7 +145,8 @@ impl B {
         }
         // 7.
         if p.rd8(0x183) != 0 && stun != 0 && p.s8(0xBA) != 4 {
-            if p.rd8(0x24) == 0x28 {
+            // Fan fix F43 (#70 row 93; 1.15m BlastTile? 0x388BE -> tail 0x8ADB9): the gas mask needs condition >= 10.
+            if p.rd8(0x24) == 0x28 && (!crate::fanfix::on(43) || p.s8(0x26) >= 10) {
                 stun = self.a.cdiv((100 - p.s8(0x26)).wrapping_mul(stun), 100);
             }
             if stun != 0 {
@@ -368,12 +369,57 @@ impl B {
         }
     }
 
+    // ---- Effect pass ----
+    /// DrawProjectilePass? 0x17548 from 0x175C3, the effect records 1..15 (fx_anims, 18 bytes each): a record in use
+    /// (count byte 0 != 0) with kind (byte 0xB) 0 is a picture only (front-end). Else with count (s8) <= `limit` and hit
+    /// flag (byte 0x10) 0 it hits: EffectHit?(tile +9, kind, power +0x11), THEN the flag = 1 (1.13b order: a merc
+    /// death inside EffectHit runs this pass again through MercDies? -> TacticalRedraw and the same record hits
+    /// again; fan fix F69 = 1.15m 0x1763A sets the flag first, #70 row 30). Not hit (count > 0x13 or flagged): kind
+    /// 3 with count 5 on a tile with byte 3 = 0 and byte 0 < 0x6C starts the fire there (StartTileAnim table
+    /// 0x9562E, count 0x2B = host op 205 kind 1) and the fire sound (PlaySfxSlot 0x1D, 0x2B11, 0x32, ECX 5).
+    /// `limit` = 0x13 in TacticalRedraw's pass; OverviewRedraw 0x23FFC (view mode 0) has the same steps with 0x16.
+    fn effect_pass(&self, limit: i8) {
+        let p = self.w().fx_anims as *mut u8;
+        if p.is_null() {
+            return;
+        }
+        for k in 1..16usize {
+            // SAFETY: fx_anims holds 16 records of 0x12 bytes (port_api.md); the host's buffer is writable.
+            let rec = |o: usize| unsafe { *p.add(k * 0x12 + o) };
+            let flag = || unsafe { *p.add(k * 0x12 + 0x10) = 1 };
+            if rec(0) == 0 || rec(0xB) == 0 {
+                continue;
+            }
+            let count = rec(0) as i8;
+            let t = i16::from_le_bytes([rec(9), rec(10)]) as i32;
+            if count <= limit && rec(0x10) == 0 {
+                let (kind, power) = (rec(0xB) as i8 as i32, rec(0x11) as i8 as i32);
+                if crate::fanfix::on(69) {
+                    flag();
+                }
+                self.a.call(op::EFFECT_HIT, &[t, kind, power]);
+                flag();
+            } else if rec(0xB) as i8 == 3 && count == 5 {
+                // SPEC GAP: a tile off the map (not 0..3135) starts no fire (the original reads past the map).
+                if (0..3136).contains(&t) && self.a.tb(t, 3) == 0 && self.a.tb(t, 0) < 0x6C {
+                    self.a.call(op::TILE_ANIM, &[t, 1]);
+                    // The overview copy (limit 0x16, OverviewRedraw 0x24068) starts the fire with no sound.
+                    if limit != 0x16 {
+                        self.a.call(op::SFX, &[0x1D, 0x2B11, 0x32, 5]);
+                    }
+                }
+            }
+        }
+    }
+
     // ---- Effect hit ----
     fn effect_hit(&self, t: i32, kind: i32, power: i8) {
         // 1.
         if self.a.tb(t, 1) == 0x86 {
             self.tile_or(t, 1, 0, 0);
-            self.rebuild_move_codes();
+            if !crate::flag_cleared_codes(self.w, t) {
+                self.rebuild_move_codes();
+            }
         }
         // 2.
         let obj = self.a.tb(t, 1);
@@ -396,6 +442,9 @@ impl B {
         // 4.
         if (kind == 2 || kind == 3) && power > 0 {
             self.a.call(op::EXPLODE_ART, &[t, (kind == 3) as i32]);
+            if crate::fanfix::on(68) {
+                self.a.bridge_sweep();
+            }
             let story = self.w().story;
             if s as i32 == get(story, STORY_LEN, 0x17) as i8 as i32 {
                 for j in 0..5i64 {
@@ -535,7 +584,9 @@ impl B {
                     reset = true;
                     if self.a.tb(tile, 1) == 0x86 {
                         self.tile_or(tile, 1, 0, 0);
-                        self.rebuild_move_codes();
+                        if !crate::flag_cleared_codes(self.w, tile) {
+                            self.rebuild_move_codes();
+                        }
                     }
                 }
             }
@@ -665,6 +716,23 @@ fn with(w: *mut Ja1World, h: *const Ja1Host, f: impl FnOnce(&B)) {
     if let Some(b) = B::new(w, h) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&b)));
     }
+}
+
+/// Op 358 effect_pass (limit) for `Ai::dispatch` (and `ja1_effect_pass`).
+pub(super) fn effect_pass(w: *mut Ja1World, h: *const Ja1Host, limit: i32) {
+    with(w, h, |b| b.effect_pass(limit as i8))
+}
+
+/// Op 359 effect_hit for `Ai::dispatch`.
+pub(super) fn effect_hit_op(w: *mut Ja1World, h: *const Ja1Host, tile: i32, kind: i32, power: i8) {
+    with(w, h, |b| b.effect_hit(tile, kind, power))
+}
+
+/// DrawProjectilePass? 0x17548 (limit 0x13) / OverviewRedraw's copy (limit 0x16: same steps, but the fire of a
+/// kind-3 record plays no sound), the effect records (the front-end's frame pass).
+#[no_mangle]
+pub extern "C" fn ja1_effect_pass(w: *mut Ja1World, h: *const Ja1Host, limit: i32) {
+    effect_pass(w, h, limit)
 }
 
 /// Op 90 explode for `Ai::dispatch`.

@@ -91,6 +91,17 @@ impl Aim {
         let t = self.a.random(1000) + 500;
         for _ in 0..3 {
             let r = self.a.random(80);
+            if crate::fanfix::on(64) {
+                // Fan fix F64 (#70 row 47): 1.15m AimScreen 0x20176..0x20197 draws the days always and keeps a merc
+                // who is away already (teamStatus != 0) as he is; the team test is gone.
+                if r < 60 {
+                    let s = self.a.random(5);
+                    if self.pb(r, P_TEAM_STATUS) == 0 {
+                        self.pb_put(r, P_TEAM_STATUS, s as u8);
+                    }
+                }
+                continue;
+            }
             if r < 60 && !self.on_team(r) {
                 let s = self.a.random(5);
                 self.pb_put(r, P_TEAM_STATUS, s as u8);
@@ -141,8 +152,18 @@ impl Aim {
         r.min(100)
     }
 
-    /// The refusal reason of profile p (0 = signs).
+    /// The refusal reason of profile p (0 = signs), with host op 337 for the merc that the remark names.
     fn refusal(&self, p: i32) -> i32 {
+        let (r, m) = self.refusal_rule(p);
+        if m < 0x40 {
+            self.a.call(op::AIM_REMARK, &[p, m as i32]);
+        }
+        r
+    }
+
+    /// MercRefusalReason 0x219CC without its side effect: the reason (0 = signs) and the profile m that the voice
+    /// remark names (0x40 = no remark). Reads only; the A.I.M. grid filter (#42) uses it for every merc.
+    fn refusal_rule(&self, p: i32) -> (i32, u8) {
         let mut r = 0;
         let mut m = 0x40u8;
         if get16(unsafe { (*self.w).profiles }, PROFILES_LEN, p as i64 * PROFILE + P_B3E as i64) != 0 {
@@ -185,10 +206,7 @@ impl Aim {
             r = 6;
             m = self.pb(p, P_B4C);
         }
-        if m < 0x40 {
-            self.a.call(op::AIM_REMARK, &[p, m as i32]);
-        }
-        r
+        (r, m)
     }
 
     /// Hire of profile p (without the quote): the team slot k, or −1 when the team is full.
@@ -283,6 +301,19 @@ pub extern "C" fn ja1_aim_refusal(w: *mut Ja1World, h: *const Ja1Host, p: i32) -
         return -1;
     }
     run(w, h, |a| a.refusal(p))
+}
+
+/// The refusal rule of profile p (0..59) with no host call (#42 A.I.M. grid): reason | remark profile << 8
+/// (remark 0x40 = none), or −1.
+#[no_mangle]
+pub extern "C" fn ja1_aim_refusal_rule(w: *mut Ja1World, h: *const Ja1Host, p: i32) -> i32 {
+    if !(0..64).contains(&p) {
+        return -1;
+    }
+    run(w, h, |a| {
+        let (r, m) = a.refusal_rule(p);
+        r | (m as i32) << 8
+    })
 }
 
 /// Hire of profile p without the quote; returns the team slot or −1.

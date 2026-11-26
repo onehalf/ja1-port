@@ -504,7 +504,11 @@ impl ReplayPic {
                 }
             }
         }
-        island::markers(&self.sheet.sheet, Self::rec(r, s), island::guard_marks()[s], s, &mut self.scratch, XP);
+        // Port fix P14 (#2 row 32): DrawMarkersTo 0x41788 draws at the sector's map coordinates, not in the 32 x 24 box:
+        // sectors 0..2 put a shifted copy of the markers into the flash (and its saved background). No markers here.
+        if !ja1logic::fanfix::port_on(14) {
+            island::markers(&self.sheet.sheet, Self::rec(r, s), island::guard_marks()[s], s, &mut self.scratch, XP);
+        }
         let w = ((j.max(0) as usize + 1) / 4) % 3;
         let put = |blk: Block, px: usize, py: usize, sc: &mut Vec<u8>, fl: &[u8]| {
             if let Some((sx, sy)) = blk {

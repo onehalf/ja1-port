@@ -5,6 +5,8 @@ The original: StoryDayEvents? 0x61DF4 runs in Unicorn on tac60 (Blight start 0x6
 FindSquadItem? 0x61528 and SectorWorkable run for real). LoadQuestRecord 0x614D4 = host op 307 quest_record: writes
 250 fuzzed bytes to 0x22A302 and logs n. The store probe 0x51A24 = host op 308 stash_take: logs (type, take),
 answers a logged random 0 / 1; on yes with take, stash_counts[type] - 1 (what the store does).
+--fan (with --port; #70 F40): the original side runs the 1.15m StoryDayEvents? sites (Emu.put_115m), the port runs
+with fix F40; story 0x06 / 0x09 / 0x0B and sector 27 get extra fuzz from their own RNG (the plain stream stays).
 Fuzzed: story bytes 0x0A 0x0B 0x0E 0x15 0x1E 0x20..0x22, guide_queue, sectors owned (accounts +0x74), difficulty
 0..2, sector table (flags, trees, unhealthy), sector records +0xAB..+0xAE, squad items (type 0x51), inCurSector,
 the quest record (sector pairs 0..59 with some out of a valid state).
@@ -30,6 +32,10 @@ PORT = "--port" in argv
 port_lib.PAY = True                  # accounts, stash_counts
 port_lib.STORYDAY = True             # guide_queue
 VERBOSE = "-v" in argv
+FAN = "--fan" in argv
+FAN_RNG = random.Random(40)
+if FAN and not PORT:
+    raise SystemExit("storyday_diff: --fan needs --port")
 
 SOLDIERS, SECTORS, RECORDS, STASH = 0xFA958, ai.G_SECTOR_TBL9, ai.G_SECTORS, ai.G_STASH_COUNTS
 STORY, QUEUE, QUEST, ACC = 0x22A040, 0x22A4C9, 0x22A302, 0x229FA0
@@ -39,6 +45,9 @@ if not os.path.exists(DUMP):
     sys.exit(1)
 e = Emu(dump=DUMP, fast=True)
 rt = e.rt
+if FAN:
+    e.put_115m(only=[(0x61E38, 0x61E3E), (0x61EA7, 0x61EAD), (0x61F2B, 0x61F31)])
+port_lib.fan_fixes((1 << 39) if FAN else 0)
 log = []
 case = {"quest": b"", "answers": []}
 
@@ -120,6 +129,12 @@ def fuzz(r):
     case["quest"] = bytes(q)
     case["real"] = r.random() < .25
     case["answers"] = [r.choice([0, 1, 1, 2]) for _ in range(4)]
+    if FAN:   # F40: the kidnapping test (story 0x06 = 2, 0x09 = 2, 0x0B < 1, sector 27 not owned)
+        f = FAN_RNG
+        for b, vals in ((0x06, [2, 2, 2, 0, 1]), (0x09, [2, 2, 2, 1, 3]), (0x0B, [0, 0, 0xFF, 1, 2])):
+            e.w8(rt(STORY) + b, f.choice(vals))
+        if f.random() < .6:
+            e.w8(rt(SECTORS) + 9 * 27, e.r8(rt(SECTORS) + 9 * 27) & 0xFE)
 
 
 def original():
@@ -162,6 +177,8 @@ def main():
         cover[f"stage {st0[0x0A] if st0[0x0A] < 3 else 'x'}->{st1[0x0A] if st1[0x0A] < 3 else 'x'}"] += 1
         for k in lo:
             cover[k[0]] += 1
+            if k == ("quest", 6):
+                cover["quest 6"] += 1   # F40 kidnapping test
         if st1[0x20] and not st0[0x20]:
             cover["cured"] += 1
         if not PORT:
@@ -189,11 +206,12 @@ def main():
                 print(f"MISMATCH case {i}: " + "; ".join(bad)[:500])
     if VERBOSE or not PORT:
         print("cover:", dict(sorted(cover.items())))
-    missing = [k for k in ("quest", "stash", "stage 0->1", "stage 1->2", "stage 1->1", "cured") if not cover[k]]
+    missing = [k for k in ("quest", "stash", "stage 0->1", "stage 1->2", "stage 1->1", "cured") + (("quest 6",) if FAN else ())
+               if not cover[k]]
     if missing:
         print(f"storyday_diff: never reached: {missing}")
         fails += 1
-    print(f"storyday_diff{' (port)' if PORT else ''}: {N} cases, {fails} mismatches")
+    print(f"storyday_diff{' (port)' if PORT else ''}{' --fan 40' if FAN else ''}: {N} cases, {fails} mismatches")
     sys.exit(1 if fails else 0)
 
 

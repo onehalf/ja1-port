@@ -381,6 +381,12 @@ void    ja1_plant_sector(Ja1World *w, const Ja1Host *h);
 void    ja1_plant_done(Ja1World *w, const Ja1Host *h);
 /* ---- Sector start batch 7 (host ops 90 explode, 91 effect, 92 open_tmp; 87 read, 88 close) ---- */
 void    ja1_fixed_items(Ja1World *w, const Ja1Host *h);
+/* #70 fan_fixes: bit nn-1 = fix Fnn of the unofficial 1.15m patch; 0 (default) = 1.13b. set = F01..F64 (clears
+   F65..F128), set_hi = F65..F128 (bit 0 = F65). */
+void     ja1_fan_fixes_set(uint64_t lo);
+void     ja1_fan_fixes_set_hi(uint64_t hi);
+uint64_t ja1_fan_fixes(void);
+uint64_t ja1_fan_fixes_hi(void);
 int32_t ja1_tmp_file(Ja1World *w, const Ja1Host *h);                  /* 1 = read, 0 = no tmp file */
 void    ja1_ground_blast(Ja1World *w, const Ja1Host *h, int32_t type, int32_t flag, int32_t power, int32_t thrower,
                          int32_t last);                               /* type, flag, thrower, last = low bytes */
@@ -400,6 +406,8 @@ int32_t ja1_quest_check(Ja1World *w, const Ja1Host *h, int32_t quest);   /* 1 = 
 int32_t ja1_action_ap(Ja1World *w, const Ja1Host *h, int32_t slot, int32_t tile, int32_t flag);   /* a byte */
 /* ---- Sector start batch 13 (op 45 shot_ap as a library op; only host call 47 div_zero) ---- */
 int32_t ja1_shot_ap(Ja1World *w, const Ja1Host *h, int32_t slot, int32_t tile);   /* a byte */
+int32_t ja1_melee_chance(Ja1World *w, const Ja1Host *h, int32_t slot, int32_t defender, int32_t aim);  /* MeleeChance 0x56A78, u8 */
+int32_t ja1_throw_chance(Ja1World *w, const Ja1Host *h, int32_t slot, int32_t tile, int32_t aim);  /* ThrowChance 0x58BB0 */
 /* ---- Soldier update per frame (soldier_update.md; library ops 97 anim_next, 98 walk_blocked,
         106 consume_trigger, 109 take_ground_item, 111 enemy_step, 117 step_noise, 119 ai_think, 122 throw_follow;
         other host ops 99..129) ---- */

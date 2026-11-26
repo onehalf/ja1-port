@@ -280,7 +280,11 @@ impl Ai {
             self.wr8(0x181, 0);
             if flag != 0 {
                 self.u_tile_point_stop(0);
-                self.call(op::SET_ANIM, &[slot, 0x10, 0, 0]);
+                // Fan fix F12 (#70 row 4; changelog 1.15m, found by MitchShudlem, fixed by DarzaR; 1.15m EndTask
+                // 0x3DA57): the stand-up picture is set with ECX 1, so first aid cancelled during the kneel-down
+                // picture also stops that picture.
+                let force = crate::fanfix::on(12) as i32;
+                self.call(op::SET_ANIM, &[slot, 0x10, 0, force]);
             }
             self.call(op::PORTRAIT, &[self.rd8(0x17A) as i32, 1]);
         }
@@ -320,7 +324,7 @@ impl Ai {
         for d in 1..=8 {
             let n = super::search::step(me, self.dir_step(d));
             if n != me {
-                best = best.min(crate::step_ap(self.u_move_code(n), 0, 0, 0) as i8 as i32);
+                best = best.min(self.step_cost(n, 0, 0, 0) as i8 as i32);
             }
         }
         best

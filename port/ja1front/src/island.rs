@@ -206,12 +206,14 @@ pub fn island_map(iso: &str, exe: &str, sectors: &[u8], marks: &[i8]) -> Result<
 }
 
 /// strategic.md "Mouse over the island map": the sector under the mouse at (x, y), -1 when y >= 141. Division
-/// rounds toward zero, the sum is a signed byte, more than 59 gives 59 (the x = 313..319 quirk is kept).
+/// rounds toward zero, the sum is a signed byte, more than 59 gives 59 (the x = 313..319 quirk is kept, P04 fixes it).
 pub fn sector_at(x: i32, y: i32) -> i32 {
     if y >= 141 {
         return -1;
     }
-    let s = (((y - 3) / 23) * 10 + (x - 3) / 31) as i8 as i32;
+    // Port fix P04 (#71, #2 row 16): the column is capped at 9 (x = 313..319 gave 10 = the next row's first sector).
+    let col = if ja1logic::fanfix::port_on(4) { ((x - 3) / 31).min(9) } else { (x - 3) / 31 };
+    let s = (((y - 3) / 23) * 10 + col) as i8 as i32;
     if s > 59 {
         59
     } else {

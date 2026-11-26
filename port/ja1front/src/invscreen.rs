@@ -70,6 +70,9 @@ pub struct InvScreen<'a> {
     /// The Control Panel switches Item Info (6) and Subtitles (5) of the world.
     pub opt_info: bool,
     pub opt_sub: bool,
+    /// screen_drawn 0x92DCC when the screen opened: ShowMouse? 0x673D0 does nothing at 0, so the pointer stays off
+    /// (a pick-up whose merc an enemy interrupted opens the screen in the enemies' turn; #70 row 90).
+    pub ready: bool,
 }
 
 impl<'a> InvScreen<'a> {
@@ -93,6 +96,7 @@ impl<'a> InvScreen<'a> {
             ended: false,
             opt_info: crate::iteminfo::OPT_INFO,
             opt_sub: crate::iteminfo::OPT_SUB,
+            ready: true,
         }
     }
 
@@ -221,8 +225,8 @@ impl<'a> InvScreen<'a> {
         let w = &*w;
         let typ = if w.held.is_null() { 0 } else { *w.held };
         // After a quote the held item has the arrow as its pointer (`speech_arrow`), also on this screen.
-        let shown = crate::pointer::held_is_pointer(typ);
-        self.input.pointer(!shown);
+        let (arrow, shown) = pointer_parts(self.ready, crate::pointer::held_is_pointer(typ));
+        self.input.pointer(arrow);
         if shown {
             let c = common(&self.iso)?;
             let d = panel::panel_data(&self.iso, &self.exe)?;
@@ -334,14 +338,17 @@ impl<'a> InvScreen<'a> {
         self.compose(w)?;
         let start = (*w).mouse_buttons;
         let subtitles = self.opt_sub;
-        let mut io = ExtraIo { s: self, sound: &mut host.sound, playing: false, boxed: None, t0: 0, shown: -1, box_ran: false, tail_t0: None };
+        let mut io = ExtraIo { s: self, sound: &mut host.sound, playing: false, boxed: None, t0: 0, shown: -1, box_ran: false, tail_t0: None, end_at: None };
         let live = crate::invextra::run(&mut io, member, text, subtitles, start)?;
-        let (boxed, t0, shown, box_ran, tail_t0) = (io.boxed.take(), io.t0, io.shown, io.box_ran, io.tail_t0);
+        let (boxed, t0, shown, box_ran, tail_t0, end_at) = (io.boxed.take(), io.t0, io.shown, io.box_ran, io.tail_t0, io.end_at);
         if let Some(t) = tail_t0 {
             eprintln!("inv extra tail {}", host.sound.ticks() - t);
         }
         // ShowMessage? 0x27CCF: the cursor tile goes to 0xC41 at the end of the box.
         host.marker_clear |= box_ran;
+        if let (Some(t), None) = (end_at, host.inv_box_end) {
+            host.inv_box_end = Some(t);
+        }
         let box_ticks = if boxed.is_some() { (host.sound.ticks() - t0) as i64 } else { shown };
         eprintln!("inv extra {} {} box {}", if member.is_empty() { "-" } else { member }, if text.is_empty() { "-" } else { text }, box_ticks);
         if !live {
@@ -437,6 +444,8 @@ struct ExtraIo<'s, 'a, 'b> {
     t0: u64,
     shown: i64,
     box_ran: bool,
+    /// When the box ended (the window's clock; the inventory time model, play.rs inv_ticks).
+    end_at: Option<std::time::Instant>,
     /// The sound ticks at the end of the box.
     tail_t0: Option<u64>,
 }
@@ -462,6 +471,7 @@ impl crate::invextra::Host for ExtraIo<'_, '_, '_> {
         self.boxed = None;
         self.s.input.pointer_box(false);
         self.box_ran = true;
+        self.end_at = Some(std::time::Instant::now());
         self.shown = (self.sound.ticks() - self.t0) as i64;
     }
     fn poll(&mut self, mode: i32) -> Option<crate::invextra::Poll> {
@@ -521,7 +531,14 @@ pub unsafe fn after_screen(w: *mut Ja1World, h: *const Ja1Host, opener: usize) {
         so[k * REC + 0x1BB] = 0;
         so[k * REC + 0x130] = 0;
     }
-    ja1_reserve_ap(w, h, so[opener * REC + 0x17A] as i32);
+    let slot = so[opener * REC + 0x17A];
+    ja1_reserve_ap(w, h, slot as i32);
+    // Port fix P11 (#71, #2 row 47): 0x54E7B reserves only for the opener; a merc switched to inside the screen
+    // (the selected slot 0x284F11 at the end) keeps its old reserved points. Level `all` reserves for it too.
+    let sel = (*w).selected;
+    if ja1logic::fanfix::port_on(11) && sel < 8 && sel != slot {
+        ja1_reserve_ap(w, h, sel as i32);
+    }
     (*w).opt_reload_msg = 1;
 }
 
@@ -541,6 +558,12 @@ pub fn cursor_after(held: u8, drop: u8, mouse_x: i32, screen_ran: bool, picked: 
     }
     let late = picked && drop == 0;
     (if late { 1 } else { drop }, (screen_ran || late).then_some((mouse_x, 191)))
+}
+
+/// The pointer of the screen: (the arrow, the held item at the mouse). UseInventoryItem? 0x53ACF ShowMouse? does
+/// nothing while screen_drawn 0x92DCC is 0 (`ready` false), so neither shows then (#70 row 90, 1.13b).
+pub fn pointer_parts(ready: bool, held_is_pointer: bool) -> (bool, bool) {
+    (ready && !held_is_pointer, ready && held_is_pointer)
 }
 
 /// Key I's rule (section 8): selected < 8, +0x138 ≠ 0, combat = 0 or screen_drawn ≠ 0, hp ≥ 15, +0x188 ≠ 1.
@@ -588,7 +611,7 @@ mod tests {
         let (mut t0, mut blink) = ([0u8; 256], 0u8);
         let mut s = InvScreen::new("", "", 0, &[], &mut t0, &mut blink, &mut input, 0);
         let mut snd = crate::sound::Sound::with_files("", "");
-        let mut io = ExtraIo { s: &mut s, sound: &mut snd, playing: false, boxed: None, t0: 0, shown: -1, box_ran: false, tail_t0: None };
+        let mut io = ExtraIo { s: &mut s, sound: &mut snd, playing: false, boxed: None, t0: 0, shown: -1, box_ran: false, tail_t0: None, end_at: None };
         let t = io.sound.ticks();
         io.refill();
         assert_eq!(io.sound.ticks(), t + 1);

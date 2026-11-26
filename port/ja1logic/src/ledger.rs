@@ -146,8 +146,11 @@ pub(super) fn recalc_territory(w: *mut Ja1World) {
     for s in 0..60u8 {
         if !owned(w, s) {
             sec_put(w, s, WORKABLE, 0);
-            sec_put(w, s, GUARDS_B, 0);
-            sec_put(w, s, TAPPERS_B, 0);
+            // F53 (1.15m RecalcTerritory 0x50EF6 jumps to 0x50FA9): a sector not owned keeps its tappers and guards.
+            if !crate::fanfix::on(53) {
+                sec_put(w, s, GUARDS_B, 0);
+                sec_put(w, s, TAPPERS_B, 0);
+            }
             continue;
         }
         add(w, SECTORS_OWNED, 1);
@@ -157,10 +160,16 @@ pub(super) fn recalc_territory(w: *mut Ja1World) {
         if !connected(w, s) {
             sec_put(w, s, WORKABLE, 0);
         } else {
-            add(w, TREES_WORKABLE, workable(w, s) as i32);
+            let wk = workable(w, s);
+            add(w, TREES_WORKABLE, wk as i32);
             // SPEC?: the lower of the two is taken as unsigned bytes.
             let t = sec(w, s, TAPPERS_B) / 3;
-            let free = sec(w, s, TREES).wrapping_sub(sec(w, s, UNHEALTHY));
+            let mut free = sec(w, s, TREES).wrapping_sub(sec(w, s, UNHEALTHY));
+            // F26 (1.15m RecalcTerritory 0x50F75 + helper 0x62356): free is first capped by the workable count, a
+            // signed byte compare, so trees drawn as not workable bring no income.
+            if crate::fanfix::on(26) && free as i8 > wk as i8 {
+                free = wk;
+            }
             add(w, TREES_TAPPED, t.min(free) as i32);
         }
     }
@@ -332,10 +341,12 @@ pub(super) fn natives_quit(w: *mut Ja1World, h: *const Ja1Host, n: u8) {
             }
         }
     }
-    // 4. The count is G, not T (original bug; strategic.md).
+    // 4. The count is G, not T (original bug; strategic.md). Port fix P03 (#71, #2 row 13): T, and the singular
+    // from T.
     if t != 0 {
         if let Some(a) = Ai::new(w, h, 0) {
-            a.call(op::NATIVES_QUIT_MSG, &[g as i32, if g <= 1 { 2 } else { 3 }]);
+            let c = if crate::fanfix::port_on(3) { t } else { g };
+            a.call(op::NATIVES_QUIT_MSG, &[c as i32, if c <= 1 { 2 } else { 3 }]);
         }
     }
 }

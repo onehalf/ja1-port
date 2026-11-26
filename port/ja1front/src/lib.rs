@@ -2,6 +2,7 @@
 //! and draws its static scene as docs/spec/tactical_map.md says. Library part with a C interface; the `ja1front`
 //! binary (feature `gui`) shows it in an SDL2 window.
 pub mod aim;
+pub mod aimgrid;
 pub mod tactkeys;
 pub mod guardopen;
 pub mod invextra;
@@ -481,6 +482,7 @@ pub unsafe extern "C" fn ja1f_click(
                     Anim { slot, code, keep, reset } => ([6, slot, code, keep, reset, 0, 0, 0], 0),
                     Message { slot, quote, near } => ([8, slot, quote, near, 0, 0, 0, 0], 0),
                     Effect { slot, kind } => ([10, slot, kind, 0, 0, 0, 0, 0], 0),
+                    CursorBack => ([11, 0, 0, 0, 0, 0, 0, 0], 0),
                 };
                 c2.borrow_mut().push(row);
                 ret
@@ -618,8 +620,9 @@ pub unsafe extern "C" fn ja1f_cursor_draw(
             let mut env = cursor::CursorEnv { table: &e.cursor, font0: &pd.fonts[0], table0: t0, view_x: v[0], view_y: v[1], view_w: v[2], view_h: v[3] };
             // SPEC GAP: a mouse tile off the map has no occupant; taken as 0x40 (none).
             let occ = if (0..3136).contains(&st.tile) { tm[st.tile as usize * 8 + 5] } else { 0x40 };
-            cursor::target_mark(buf, &t.sprites, &mut env, st, occ);
             let recs = std::slice::from_raw_parts(soldiers as *const u8, 48 * 512);
+            let cc = if ((occ & 0x7F) as usize) < 48 { recs[(occ & 0x7F) as usize * 512 + 0x9C] } else { 0 };
+            cursor::target_mark(buf, &t.sprites, &mut env, st, occ, cc);
             cursor::cursor_pass(buf, &t.sprites, &mut env, st, Some((recs, tm)));
             std::slice::from_raw_parts_mut(table0 as *mut u8, 256).copy_from_slice(&env.table0);
             Ok(())
@@ -2576,6 +2579,13 @@ pub unsafe extern "C" fn ja1f_ctl_shell(st: *mut i32, r: i32) -> i32 {
 pub extern "C" fn ja1f_cursor_after(held: u8, drop: u8, mouse_x: i32, screen_ran: i32, picked: i32) -> i64 {
     let (f, m) = invscreen::cursor_after(held, drop, mouse_x, screen_ran != 0, picked != 0);
     f as i64 | (m.is_some() as i64) << 8 | (m.map_or(0, |p| p.0) as i64) << 16
+}
+
+/// invwrap_diff --fan 66: screen_drawn 0x92DCC while a pick-up's inventory screen runs (play::pick_screen_drawn with
+/// fan fix F66 from the switch mask, #70 row 90).
+#[no_mangle]
+pub extern "C" fn ja1f_pick_screen_drawn(drawn: u8, from_pick: i32) -> i32 {
+    crate::play::pick_screen_drawn(drawn, from_pick != 0, ja1logic::fanfix::on(66)) as i32
 }
 
 /// payday_diff: the mouse place of a morning host op (mouselimit::place_of_op); 0 = no move.
@@ -5806,6 +5816,9 @@ pub unsafe extern "C" fn ja1f_slot_mouse(soldiers: *mut u8, state: *mut i32, tap
                         log.push([13, 0, 0, 0, 0, 0, 0, 0]);
                     }
                     Act::Select => {
+                        if slotmouse::cursor_back_first() {
+                            log.push([28, 0, 0, 0, 0, 0, 0, 0]);
+                        }
                         log.push([19, k as i32, alt, 1, 0, 0, 0, 0]);
                         log.push([13, 0, 0, 0, 0, 0, 0, 0]);
                     }
@@ -7449,6 +7462,15 @@ pub unsafe extern "C" fn ja1f_cursor_back(w: *mut host::Ja1World) -> i32 {
     play::cursor_back_raw(w) as i32
 }
 
+/// ja1f_cursor_back with the host (port fix P22 puts the item on the ground when the merc has no empty place).
+///
+/// # Safety
+/// As ja1f_cursor_back; `h` is null or a valid host.
+#[no_mangle]
+pub unsafe extern "C" fn ja1f_cursor_back_host(w: *mut host::Ja1World, h: *const host::Ja1Host) -> i32 {
+    play::cursor_back_host(w, h) as i32
+}
+
 /// guardopen_diff: the steps of FUN_1328C as text, one line each, "screen" between the two lists; `state` = wobble dx, wobble dy,
 /// over_map, cursor tile, changed by `guardopen::mouse_off`. Returns the bytes written, or E_ARG.
 ///
@@ -7681,7 +7703,7 @@ pub extern "C" fn ja1f_frame_shade(combat: u8, view_hold: u8) -> i32 {
 
 /// stripbuttons_diff: StopWalk 0x104C8; `io` = view_hold, turn_shown. Returns the last shaded element of the frame.
 #[no_mangle]
-pub unsafe extern "C" fn ja1f_stop_walk(slot: u8, flag: u8, combat: u8, selected: u8, io: *mut u8) -> i32 {
+pub unsafe extern "C" fn ja1f_stop_walk(slot: u8, flag: i32, combat: u8, selected: u8, io: *mut u8) -> i32 {
     let (mut v, mut t) = (*io, *io.add(1));
     strips::set_shade_last(0);
     strips::stop_walk(slot, flag, combat, selected, &mut v, &mut t);
@@ -8509,20 +8531,22 @@ pub unsafe extern "C" fn ja1f_key_flags(flags: i32, io: *mut i32) -> i32 {
     }
 }
 
-/// keyhandler_diff: `tactkeys::route` for the key bytes `first`, `second` and the 14 gate values
+/// keyhandler_diff: `tactkeys::route` for the key bytes `first`, `second` and the 15 gate values
 /// (selected, combat, drawn, turn_shown, view_hold, paused, compress, held, level, save_anywhere, mode, quick_file,
-/// in_play, hp). out: route number, its argument, back, clears marks, the debug level after a level key.
+/// in_play, hp, turn_moves). out: route number, its argument, back, clears marks, the debug level after a level key, the strip
+/// reload (fan fix F67, under the fan_fixes mask).
 ///
 /// # Safety
-/// `gates` points to 14 i32, `out` to 5 i32.
+/// `gates` points to 15 i32, `out` to 6 i32.
 #[no_mangle]
 pub unsafe extern "C" fn ja1f_tactical_key(first: i32, second: i32, gates: *const i32, out: *mut i32) {
     use tactkeys::Route as R;
-    let v = std::slice::from_raw_parts(gates, 14);
+    let v = std::slice::from_raw_parts(gates, 15);
     let g = tactkeys::Gates {
         selected: v[0] as u8, combat: v[1] != 0, drawn: v[2] != 0, turn_shown: v[3] != 0, view_hold: v[4] != 0,
         paused: v[5] != 0, compress: v[6] != 0, held: v[7] != 0, level: v[8] as u8, save_anywhere: v[9] != 0,
         mode: v[10] as u8, quick_file: v[11] != 0, in_play: v[12] != 0, hp: v[13] as i8,
+        turn_moves: v[14] != 0,
     };
     let r = tactkeys::route(first as u8, second as u8, &g);
     let (n, arg) = match r {
@@ -8538,12 +8562,14 @@ pub unsafe extern "C" fn ja1f_tactical_key(first: i32, second: i32, gates: *cons
     if let R::Debug(c) = r {
         debugkeys::level_key(c);
     }
-    let o = std::slice::from_raw_parts_mut(out, 5);
+    let fan67 = ja1logic::fanfix::on(67);
+    let o = std::slice::from_raw_parts_mut(out, 6);
     o[0] = n;
     o[1] = arg;
-    o[2] = r.back() as i32;
+    o[2] = r.back_fan(fan67) as i32;
     o[3] = tactkeys::clears_marks(g.mode) as i32;
     o[4] = debugkeys::level() as i32;
+    o[5] = r.strip_reload(fan67) as i32;
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ pub const OPT_SUB: bool = false;
 
 /// Subtitles for the captions of speech (the listening device): OPT_SUB, or on when JA1_SUBTITLES=1.
 pub fn subtitles() -> bool {
-    OPT_SUB || std::env::var("JA1_SUBTITLES").is_ok_and(|v| v == "1")
+    OPT_SUB || crate::config::read::subtitles(std::env::var("JA1_SUBTITLES").ok().as_deref())
 }
 
 /// The inputs of one box (host op 231 item_info without the mouse flag).

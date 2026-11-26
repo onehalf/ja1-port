@@ -153,7 +153,14 @@ impl Ai {
         let slot = self.slot();
         let g = |o: usize| s16(self.rd16(o) as i32);
         // 1.
-        if self.rd8(0x1BE) != 2 || !matches!(self.a_anim_of(self.s), 0x1B | 0x1F | 0x23) || g(0xDC) == NONE as i32 {
+        if self.rd8(0x1BE) != 2 {
+            return;
+        }
+        // #70 F32 (row 23): 1.15m 0x5AD6A waits while something still animates (busy 0x92E38 > 0).
+        if crate::fanfix::on(32) && unsafe { (*self.w).busy } > 0 {
+            return;
+        }
+        if !matches!(self.a_anim_of(self.s), 0x1B | 0x1F | 0x23) || g(0xDC) == NONE as i32 {
             return;
         }
         // 2.
@@ -322,10 +329,13 @@ impl Ai {
         // 5.
         let mut d = world_dist(g(0x116), g(0x118), px(tile), py(tile));
         // 6.
-        if u(me, 0x24) == 0x27 {
+        // Fan fix F43 (#70 row 93; 1.15m 0x566F7 -> tail 0x8AD3A, 0x5671D -> tail 0x8AD4D): sun goggles need
+        // condition >= 10 and the scope condition > 9 (signed bytes), else they give nothing.
+        let worn = crate::fanfix::on(43);
+        if u(me, 0x24) == 0x27 && (!worn || s(me, 0x26) >= 10) {
             d -= self.cdiv(d, 10);
         }
-        if u(me, 3) == 0x42 && d > 150 && aim != 0 {
+        if u(me, 3) == 0x42 && (!worn || s(me, 5) > 9) && d > 150 && aim != 0 {
             let q = s16(self.cdiv((d - 150) * aim * 15, 100));
             d -= self.cdiv(q * s(me, 5), 100);
         }
@@ -378,7 +388,9 @@ impl Ai {
         // 9.
         let (hp, mh) = (s(me, 0x183), s(me, 0x184));
         if hp < mh {
-            let lost = ((u(me, 0x184) - u(me, 0x183) - u(me, 0x185)) as u8 as i32) / 2 + (mh - hp);
+            let half = ((u(me, 0x184) - u(me, 0x183) - u(me, 0x185)) as u8 as i32) / 2;
+            // Fan fix F06 (#70 row 88, switch HEALTHY; 1.15m 0x5698F -> 0x3BFCF): bandages lower the loss.
+            let lost = if crate::fanfix::on(6) { (mh - hp) - half } else { half + (mh - hp) };
             let part = self.cdiv(c * 2 * lost, mh * 3) as u8 as i32;
             c -= self.cdiv(part * (100 - (s(me, 0x192) - 1) * 10), 100);
         }
@@ -497,7 +509,8 @@ impl Ai {
         }
         // 9.
         // SPEC GAP: an index 8 × object + direction past the 2056-byte table reads 0.
-        let wn = get8(unsafe { (*self.w).window }, WINDOW_LEN, 8 * b as i64 + dir as i64) as i8 as i32;
+        let wi = 8 * b as i64 + dir as i64;
+        let wn = crate::fanfix::window_byte(wi, get8(unsafe { (*self.w).window }, WINDOW_LEN, wi)) as i8 as i32;
         if wn >= 0x62 && h < 9000 {
             let p = 100 - self.cdiv(flown - 15, 5);
             // (0x57AB7..0x57AC0: only a call that enters with chance 0 can stop here. Line of fire enters with 100.)
@@ -550,10 +563,14 @@ impl Ai {
             (*self.w).anim_signal = -2;
         }
         let t = s16(self.rd16(0xDC) as i32);
-        let occ = self.a_occupant(t);
+        // #70 F59 (row 49): 1.15m 0x3523F refuses a target tile >= 0xC40 (signed) and goes straight to step 6;
+        // 1.13b reads the occupant past the tile map, which can hit a wrong soldier.
+        let off_map = crate::fanfix::on(59) && t >= 0xC40;
+        let occ = if off_map { NO_SLOT } else { self.a_occupant(t) };
         if occ >= NO_SLOT {
             // 2.
-            if unsafe { (*self.w).cur_sector } as i8 as i32 == self.m_story(0x17) as i8 as i32
+            if !off_map
+                && unsafe { (*self.w).cur_sector } as i8 as i32 == self.m_story(0x17) as i8 as i32
                 && self.m_story(0x15) == 0
                 && self.m_story(0x16) == 0
                 && self.tb(t, 1) == 0xAE
@@ -621,7 +638,9 @@ impl Ai {
                 if sure && o.s8(0x183) >= 15 && o.s8(0xBA) != 2 {
                     o.hit_alert(slot as usize, 1);
                 }
-                if occ < 8 {
+                // #70 F30 (row 20): 1.15m 0x35517 rolls the target's practice only when the attacker is an enemy
+                // (slot >= 0x28), so a merc missed by his own side gets no roll.
+                if occ < 8 && (slot >= 0x28 || !crate::fanfix::on(30)) {
                     self.call(op::STAT_PRACTICE, &[occ as i32, 2, 1, 0]);
                 }
             }
@@ -632,6 +651,11 @@ impl Ai {
         let snd = get16(unsafe { (*self.w).attack_sound }, ATTACK_SOUND_LEN, 2 * class as i64) as i16 as i32;
         self.call(op::SPEND_AP, &[slot, (c + self.s8(0x1FD)) as i8 as i32, snd]);
         self.wr8(0x1BE, 0);
+        // #70 F33 (row 25): 1.15m 0x355C2 also clears the queued action +0x1A6 (the knife of a walk-to-stab), so
+        // the next click with no one on the tile does not say "No one there".
+        if crate::fanfix::on(33) {
+            self.wr8(0x1A6, 0);
+        }
     }
 }
 

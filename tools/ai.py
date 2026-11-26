@@ -2540,6 +2540,9 @@ ROOF_OPEN = {0x12: (0x53, 0x52, 0x54, 0x53, 9), 0x13: (0x5E, 0x5D, 0x5F, 0x5E, 0
              0x14: (0x69, 0x68, 0x6A, 0x69, 0x1F)}   # t2 class of t3: north keep above, south needs, roof above, 0x4C, + t2
 
 
+FAN_FIXES = set()   # #70: fan fix ids the diff test turns on (ai_diff --fan); the mirror is 1.13b otherwise
+
+
 def reveal_view(facing, rng_, s, w, think_):
     """0x1491C (AL = facing, DL = range, EBX = soldier, CL = think after): a merc's view sweep. 17 rays (9 steps each
     in the table for odd or even facings, 0x93554 / 0x935ED) step from the soldier's tile through the five
@@ -2599,6 +2602,8 @@ def reveal_view(facing, rng_, s, w, think_):
                             if not s[0x16D] and s16(u16(s, 0x120)) != NO_TILE and u16(s, 0x120) != u16(s, 0x114):
                                 w.s8(G_SPOT_STOP, 1)
                                 s[0x16D] = 1
+                                if 61 in FAN_FIXES:   # #70 F61 (1.15m MercView 0x14C75 -> cave 0x8AF04)
+                                    w.ext("w_53660")
                                 w.ext("w_1148c", s[0x17A], 1, 0)
                             w.ext("stat_practice", s, 4, 1, 0)
                             found = 1
@@ -10979,16 +10984,17 @@ G_SQUAD_LOST = 0x22A10B       # u8: set by MercDies when no other merc 0..7 is i
 DEATH_FRAMES = 0x22A4EF       # g_backBuffer: 10 portrait frames of 0x1C bytes per row step (MercDies)
 
 
-def merc_death_show(s, w, quiet):
+def merc_death_show(s, w, quiet, redraw=None):
     """MercDies? 0x3A4A4, its merc part before the squad check (the port's host op 186 death_show): 0x229D2C = none;
     not quiet: 0x67368 and, with 0x92DDF set, TacticalRedraw(1); the death portrait, sound, voice, 10 frames,
-    "is dead!", FormatSectorDatName, 0x67398."""
+    "is dead!", FormatSectorDatName, 0x67398. redraw (--port): the port asked its effect pass (op 358) = the
+    TacticalRedraw call; None = the original's condition."""
     slot = s[0x17A]
     w.s32(0x229D2C, NO_TILE)
     if not quiet:
         w.ext("mouse_hide")
-        if w.g8(G_REDRAW_OFF):
-            w.ext("tac_redraw", 1)
+    if (not quiet and w.g8(G_REDRAW_OFF)) if redraw is None else redraw:   # (redraw: the port asked op 358)
+        w.ext("tac_redraw", 1)
     w.ext("open_dat", "dat\\mf1.dat" if s[0x179] < 0x1E else "dat\\mf2.dat")
     w.s32(0x229D18, w.ext("load_pcc", w.g32(0x92F48), None, f"morf{s[0x179]}.pcc", None, 0x180))
     w.ext("fx_load", "FX\\OVERHEAD", 0xFFFFFFFF, "DEATH")
@@ -11724,7 +11730,7 @@ def loop_head(w):
     while below 20; drawn: 0x22A484 > 0 -> - 1, else s16 0x22A486 > 0 and new_round 0x22A0CD = 1 -> 0x22A486 - 1.
     (2) u8 0x229E00 < 0x30: 0x56D3C (weapon status text, UI).
     (3) Enemies in the sector (sector_state byte 1 != 0): not in combat and byte 2 (mercs here) != 0 -> combat
-    starts: (0x11D40(0) does nothing) combat 0x92DCB = 1, 0x67E18, merc_to_show 0x92DC7 >= 8 -> FirstMerc, NewTurn(0),
+    starts: 0x11D40(0) (time compression 0x9300C = 0, tick step 10; button-up waits = platform) combat 0x92DCB = 1, 0x67E18, merc_to_show 0x92DC7 >= 8 -> FirstMerc, NewTurn(0),
     LoadStripPccs(0x92DDF < 3, 1), turn_shown 0x92DCA = 1; else redraw_pending 0x92DA4 != 0 -> NewTurn(0). Then the
     turn clock 0x229D1C = -1. No enemies: in combat -> combat = 0, turn clock 20000, turn_shown 0, combat_end,
     redraw_pending -> NewTurn(0); not in combat: turn clock = 0 -> (busy 0x92E38 < 1 -> busy = 0, NewTurn(0));
@@ -11753,6 +11759,8 @@ def loop_head(w):
     row = G_SECTOR_TBL9 + 9 * w.g8(G_CUR_SECTOR)
     if w.g8(row + 1):
         if not w.g8(G_COMBAT) and w.g8(row + 2):
+            w.s8(0x9300C, 0)               # TimeCompress(0) 0x10986
+            w.s32(G_TICK_STEP, 10)
             w.s8(G_COMBAT, 1)
             w.ext("w_67e18")
             if w.g8(0x92DC7) >= 8:

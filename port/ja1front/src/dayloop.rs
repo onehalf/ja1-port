@@ -203,7 +203,10 @@ impl Play {
             // ending.md "Game end" step 2: an end code set in the sector (1 won, 4 home lost) ends the game; the
             // verdict does not run.
             let code = w.update.leave_reason as i32;
-            if code != 0 {
+            // Fan fix F62 (#70 row 72): 1.15m PlayLoop 0x4FC47 calls DayEndScreen? after an end code too: the last
+            // day's accounts, replay and verdict (DayScore) run; the cave 0x1EEC1 makes the result the end code.
+            let last_day = code != 0 && ja1logic::fanfix::on(62);
+            if code != 0 && !last_day {
                 self.day.game_over = Some(code);
                 self.host.day_phase = false;
                 return (None, w.day);
@@ -217,6 +220,7 @@ impl Play {
             // The verdict's quotes (and the bonus quote) show over the day replay screen until OK button 15.
             self.host.quote_under = self.host.replay_last.clone();
             let r = Session::new(w, &mut self.host).day_verdict();
+            let r = if last_day { code } else { r };
             self.day.verdict = Some(r);
             self.day.rating = self.host.rating;
             if let Some(score) = self.day.rating {
@@ -1135,6 +1139,15 @@ impl Play {
         self.day.lines.push("game over screen".into());
         self.day.trace_line("over".into());
         self.day.over_screen = Some((buf, crate::eod::scale_palette(&pal)));
+        if ja1logic::fanfix::on(62) {
+            // Fan fix F62 (#70 row 72): 1.15m PlayLoop 0x4FCCE jumps to 0x4FC87 after GameOverScreen: the rating text
+            // of the lost game (PerformanceRating? 0x62EB4), then the program ends; no new game.
+            let score = Session::new(w, &mut self.host).performance_rating();
+            let t = crate::ending::rating_text(score);
+            self.day.lines.push(format!("rating {}", t));
+            self.day.exit_text = Some(t);
+            return Ok(());
+        }
         *w = crate::ending::new_game_after(iso, exe, w).map_err(|e| format!("new game: {}", e))?;
         self.day.lines.push(format!("new game {}", w.difficulty));
         self.day.trace_line(format!("new {} link {}", w.difficulty, w.accounts.get(0xA3).copied().unwrap_or(0)));

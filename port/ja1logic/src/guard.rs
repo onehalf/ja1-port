@@ -147,6 +147,13 @@ fn click(w: *mut Ja1World, g: &mut Ja1GuardScreen, s: i32, buttons: i32, ctrl: i
             if s == g.pick {
                 sec_add(w, s, 4, 1);
             } else {
+                // Fan fix F05 (#70 row 95, #2 row 22; changelog 1.15 jan 08 "In case Guards were sent to a sector
+                // with Guards already travelling", found by DarzaR): 1.15m (0x42D82 -> tail 0x8AEC5) refuses the send while
+                // guards are on the way to s (b5 > 0, signed byte) with "Can't mix sectors!"; the close would write
+                // over the walking guards (#2 row 22).
+                if crate::fanfix::on(5) && b5(w, s) as i8 > 0 {
+                    return 18;
+                }
                 let k = g.moves_n[ix(s)];
                 // SPEC GAP: n < 8 keeps the entry index in 0..7.
                 if (0..8).contains(&k) {

@@ -1,6 +1,6 @@
 """Differential test: the key part of TacticalKeyHandler 0x13490, original vs port (port/ja1front tactkeys.rs).
 
-usage: .venv/bin/python validate/diff/keyhandler_diff.py [ncases=6000] [DUMP] [--port] [--lib SO]
+usage: .venv/bin/python validate/diff/keyhandler_diff.py [ncases=6000] [DUMP] [--port] [--lib SO] [--fan 67]
 The original runs in Unicorn from its entry with KeyPressed 0x5616C and GetKey 0x560F4 scripted, every callee of the
 key part stubbed and logged, and the common tail 0x1409B as the end of a run. A case: fuzzed gates (selected, enemies
 near, screen drawn, turn shown, view hold, pause, compression, cursor item, debug level, save-anywhere, view mode,
@@ -9,6 +9,10 @@ route for the same bytes and gates must expect the same calls, the same number o
 the marks 0x229C94 / 0x229C8C, the debug level 0x955EC, the arrow direction 0x284F17 and turn shown 0x92DCA.
 A second part runs 0x1409B..0x141A8 from its own entry: the Alt, Ctrl and Shift latches and the hand cursor of Ctrl.
 Without --port only the original runs. Exits 1 on any mismatch.
+--fan 67 (#70 row 86): the original runs with the 1.15m bytes of the six key sites and their caves (CursorItemBack?
+before Alt+R / Alt+S / Alt+X, LoadStripPccs? 0x2F928 after the boxes), the port with fan fix F67 on.
+--pfix 21 (#71, #2 row 63): turn_moves 0x92DD0 is fuzzed too; the original runs with the cave at 0x13DE8 (key D: no
+EndTurn while an enemy interrupt waits), the port with port fix P21 on.
 """
 import ctypes, os, random, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -19,9 +23,12 @@ from unicorn import UC_HOOK_CODE  # noqa: E402
 from unicorn.x86_const import UC_X86_REG_ESI, UC_X86_REG_ESP  # noqa: E402
 
 argv = sys.argv[1:]
+import pfix  # noqa: E402
+PFIX = pfix.parse(argv)
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
-args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
+FAN = "--fan" in argv
+args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
 ncases = int(args[0]) if args else 6000
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
 PORT = None
@@ -29,12 +36,16 @@ if "--port" in argv:
     PORT = ctypes.CDLL(LIB)
     PORT.ja1f_tactical_key.argtypes = [ctypes.c_int32, ctypes.c_int32, ctypes.c_void_p, ctypes.c_void_p]
     PORT.ja1f_tactical_key.restype = None
+    PORT.ja1_fan_fixes_set.argtypes = [ctypes.c_uint64]
+    PORT.ja1_fan_fixes_set(0)
+    PORT.ja1_fan_fixes_set_hi.argtypes = [ctypes.c_uint64]
+    PORT.ja1_fan_fixes_set_hi((1 << (67 - 65)) if FAN else 0)     # F67 = bit 2 of the high half
 
 NAMES = {0x1002C: "Pause", 0x104C8: "StopWalk", 0x11448: "SeesMsg", 0x1148C: "SelectMerc", 0x11D40: "TimeCompress",
          0x11DC0: "AskAbort", 0x11E2C: "TurnSightings", 0x121D8: "EndTurn", 0x126C8: "NewTurn", 0x12D58: "NextTurn",
          0x1315C: "NextMerc", 0x1328C: "Map", 0x176C8: "Redraw", 0x197D8: "SnapToTile", 0x1CBA8: "Traverse",
          0x1D950: "TilePopup", 0x1EE84: "AtWaypoint", 0x1F2C4: "AnimStep", 0x23760: "TileObject", 0x23944: "TileOccupant",
-         0x248E4: "SetView", 0x27CE0: "MsgStrInt", 0x27D24: "Status", 0x29D54: "SayAgain", 0x2C898: "QuickRestore",
+         0x248E4: "SetView", 0x27CE0: "MsgStrInt", 0x27D24: "Status", 0x29D54: "SayAgain", 0x2C898: "QuickRestore", 0x2F928: "Strips",
          0x2D880: "QuickSave", 0x32754: "Rest", 0x331A4: "RedrawSlot", 0x38084: "AskQuit", 0x392FC: "TakeDamage",
          0x3ACB8: "BreakObject", 0x3D98C: "EndTask", 0x3DDB8: "ClearTask", 0x3F724: "FocusOn", 0x3F7C8: "NextEnemy",
          0x3F8A4: "PlaceAt", 0x3F994: "Toggle", 0x40024: "StatPopups", 0x40568: "Swap", 0x4B730: "Lock", 0x4B764: "Unlock",
@@ -43,6 +54,19 @@ NAMES = {0x1002C: "Pause", 0x104C8: "StopWalk", 0x11448: "SeesMsg", 0x1148C: "Se
 TILE_VIEW, TILE_OVER = 777, 888      # the answers of ViewPixelToTile? and OverviewTileAtMouse
 
 e = Emu(dump=dump, fast=True)
+# F67 (#70 row 86): the six key sites; the caves lie in the tail (put_115m writes all of it)
+FAN_RUNS = [(0x137BE, 0x137C3), (0x138BC, 0x138C1), (0x138DC, 0x138E1), (0x138EB, 0x138F0), (0x13D7C, 0x13D81),
+            (0x13ED0, 0x13ED5)]
+if FAN:
+    e.put_115m(only=FAN_RUNS)
+if PFIX:
+    class _FrontFixes:              # the port side is libja1front: its own copy of the fix masks
+        @staticmethod
+        def port_fixes(m):
+            if PORT:
+                PORT.ja1_port_fixes_set.argtypes = [ctypes.c_uint64]
+                PORT.ja1_port_fixes_set(m)
+    pfix.apply(e, PFIX, _FrontFixes)
 rt = e.rt
 log, keys, getkeys, file_there, occupant = [], [], [0], [0], [0]
 
@@ -94,6 +118,10 @@ PLAIN = {3: ["AskQuit"], 4: ["QuickSave"], 5: ["QuickRestore"], 9: ["Back", "Opt
          20: ["Back", "EndTurn"], 21: ["Back"], 22: ["Inventory"], 23: ["SayAgain"], 24: ["Map"], 25: ["Pause"],
          26: ["Lock", "StatPopups", "Unlock"], 27: ["Back", "Traverse"], 28: ["Status"], 29: ["Swap"], 30: ["TilePopup"],
          1: ["Pause"], 2: ["TimeCompress"], 7: ["SelectMerc"], 0: []}
+if FAN:
+    for k_, v_ in ((3, ["Back", "AskQuit", "Strips"]), (4, ["Back", "QuickSave", "Strips"]), (5, ["Back", "QuickRestore", "Strips"]),
+                   (9, ["Back", "Options", "Strips"]), (17, ["Back", "AskAbort", "Strips"]), (27, ["Back", "Traverse", "Strips"])):
+        PLAIN[k_] = v_
 INV_POINTER = 0x67BF0
 e.stub(rt(INV_POINTER), lambda em, *a: 0)
 DEBUG_FIRST = {0x110: "Toggle", 0x112: "Toggle", 0x126: "Rest", 15: "TileOccupant", 16: "FocusOn", 20: "PlaceAt",
@@ -113,10 +141,13 @@ for i in range(ncases):
     if i % 3 == 0:     # the keys with arms, more often under each gate
         first, second = rng.choice([(c, 0) for c in b"\x01\x02\x04\x06\x09\x0c\x0d\x0f\x10\x12\x14\x1b +,-.@AaCcDdEFGIiKLMOPSTVXZ"]
                                    + [(0, s) for s in (0x10, 0x12, 0x13, 0x1F, 0x26, 0x2D, 0x43, 0x44, 0x48, 0x49, 0x4B, 0x4D, 0x50, 0x51, 0x52, 0x5E)])
+    if PFIX and i % 5 == 1:     # --pfix 21: key D under every gate
+        first, second = rng.choice(b"Dd"), 0
     g = dict(selected=rng.choice([0, 1, 3, 7, 8, 9, 20, 0x2F]), combat=bit(), drawn=bit(0.7), shown=bit(0.7), hold=bit(0.3),
              paused=bit(0.08), compress=bit(0.08), held=bit(0.3), level=rng.choice([0, 1, 2, 3, 4, 4, 4]),
              anywhere=bit(0.3), mode=rng.choice([0, 1, 2, 3]), quick=bit(), in_play=bit(0.8),
              hp=rng.choice([0, 14, 15, 16, 60, 0x80, 0xFF]))
+    g["moves"] = bit(0.25) if PFIX else 0
     s = e.r32(rt(TABLE) + 4 * g["selected"])
     e.w8(rt(SELECTED), g["selected"])
     for a, v in ((COMBAT, g["combat"]), (DRAWN, g["drawn"]), (SHOWN, g["shown"]), (HOLD, g["hold"]), (PAUSED, g["paused"]),
@@ -125,6 +156,7 @@ for i in range(ncases):
         e.w8(rt(a), v)
     e.w8(s + 0x138, g["in_play"])
     e.w8(s + 0x183, g["hp"])
+    e.w8(rt(0x92DD0), g["moves"])
     e.w32(rt(SPOTTED), 5)
     e.w32(rt(VIEW_TILE), 1000)
     file_there[0] = g["quick"]
@@ -138,12 +170,12 @@ for i in range(ncases):
     one = log[0] if log else ("", 0, 0, 0)
     if not PORT:
         continue
-    gates = (ctypes.c_int32 * 14)(g["selected"], g["combat"], g["drawn"], g["shown"], g["hold"], g["paused"], g["compress"],
+    gates = (ctypes.c_int32 * 15)(g["selected"], g["combat"], g["drawn"], g["shown"], g["hold"], g["paused"], g["compress"],
                                   g["held"], g["level"], g["anywhere"], g["mode"], g["quick"], g["in_play"],
-                                  g["hp"] - 256 if g["hp"] >= 128 else g["hp"])
-    o = (ctypes.c_int32 * 5)()
+                                  g["hp"] - 256 if g["hp"] >= 128 else g["hp"], g["moves"])
+    o = (ctypes.c_int32 * 6)()
     PORT.ja1f_tactical_key(first, second, ctypes.addressof(gates), ctypes.addressof(o))
-    r, arg, back, marks, level = o
+    r, arg, back, marks, level, strips = o
     kinds[ROUTES[r]] = kinds.get(ROUTES[r], 0) + 1
     bad = []
     tile = TILE_VIEW if g["mode"] else TILE_OVER
@@ -151,6 +183,8 @@ for i in range(ncases):
         bad.append(f"calls {names}")
     if ("Back" in names) != bool(back):
         bad.append(f"back {back}")
+    if ("Strips" in names) != bool(strips):
+        bad.append(f"strips {strips}")
     if getkeys[0] != (2 if first == 0 else 1):
         bad.append(f"GetKey count {getkeys[0]}")
     if (e.r32(rt(SPOTTED)), e.r32(rt(VIEW_TILE))) != ((0x40, 0xC41) if marks else (5, 1000)):

@@ -11,4 +11,4 @@ mkdir -p game/Jagged-Alliance
 innoextract -s -e "$SETUP" -d game/Jagged-Alliance
 ls game/Jagged-Alliance/JA1.gog game/Jagged-Alliance/JA.EXE >/dev/null 2>&1 || ls -R game/Jagged-Alliance | grep -qi "ja1.gog" \
   || { echo "install-from-gog: JA1.gog not found after unpacking" >&2; exit 1; }
-echo "done: start ./ja1front"
+echo "done: start ./ja1-port (./setup.sh for the settings)"

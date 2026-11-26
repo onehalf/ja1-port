@@ -268,18 +268,28 @@ impl Ai {
             }
         };
         let obj_up = || self.ut_tile_put(tile, 1, self.tb(tile, 1).wrapping_add(1));
-        let no_pickup = |g: u8| matches!(self.ut_ge(g, 0), 0x44 | 0x52 | 0x70);
+        // Port fix P08 (#2 row 37): the type test of a ground entry needs a real entry (g < 0xFF); 1.13b read entry
+        // 0xFF, past the table, in profile 5's kit.
+        let no_pickup = |g: u8| !(crate::fanfix::port_on(8) && g == 0xFF) && matches!(self.ut_ge(g, 0), 0x44 | 0x52 | 0x70);
         // 8.
         if locked {
             if g < 0xFF {
                 if self.call(DISARM, &[slot, tile, g as i32, 1, 1]) as i32 <= 0 {
                     g = 0xFF;
-                } else if !nocrow && self.crowbar(tile, flag) != 1 {
-                    self.call(op::MERC_MESSAGE, &[slot, 0x17, 0x40, 0, 1]);
-                    g = 0xFF;
                 } else {
-                    obj_up();
-                    sound();
+                    if crate::fanfix::on(55) {
+                        // F55 (1.15l changelog: free experience from an adjacent object; found by DarzaR): 1.15m
+                        // UseOnTile? 0x3D2B6..0x3D2E1 drops the tile from the blast list (BlastListRemove? 0x3B718)
+                        // after a disarmed lock trap, before the crowbar test.
+                        self.blast_list_remove(tile);
+                    }
+                    if !nocrow && self.crowbar(tile, flag) != 1 {
+                        self.call(op::MERC_MESSAGE, &[slot, 0x17, 0x40, 0, 1]);
+                        g = 0xFF;
+                    } else {
+                        obj_up();
+                        sound();
+                    }
                 }
             } else if !nocrow && self.crowbar(tile, flag) != 1 {
                 self.call(op::MERC_MESSAGE, &[slot, 0x17, 0x40, 0, 1]);
@@ -289,14 +299,21 @@ impl Ai {
                 self.call(op::QUOTE_EVENT, &[me as i32, 0xFB, 6, NONE, 0]);
             }
         } else if no_pickup(g) {
-            self.call(op::TRIGGER_ITEM, &[slot, tile, g as i32, 1]);
+            if !(crate::fanfix::on(54) && g == 0xFF) {
+                self.call(op::TRIGGER_ITEM, &[slot, tile, g as i32, 1]);
+            }
         } else if me >= 8 {
-            self.call(op::TRIGGER_ITEM, &[slot, tile, g as i32, 1]);
+            // F54 (1.15l changelog: odd animations when a moving merc uses a nearby object; found by DarzaR):
+            // 1.15m UseOnTile? 0x3D412 / 0x3D4B5..0x3D4D5 calls TriggerItem? only for a real ground entry (not 0xFF).
+            if !(crate::fanfix::on(54) && g == 0xFF) {
+                self.call(op::TRIGGER_ITEM, &[slot, tile, g as i32, 1]);
+            }
             finish(practise);
             return;
         } else {
             spotted = self.call(MINE_SPOTTED, &[slot, tile, g as i32]) as u8;
-            practise = true;
+            // F55: 1.15m cave 0x2118B (called at 0x3D436) sets practise only for a real ground entry.
+            practise = !crate::fanfix::on(55) || g != 0xFF;
             if breaks {
                 if self.crowbar(tile, flag) == 1 {
                     self.call(op::BREAK_OBJECT, &[tile, obj as i32, 1]);
@@ -309,16 +326,21 @@ impl Ai {
         }
         // 9.
         if g < 0xFF {
-            if practise {
+            let ask = practise;
+            if practise && crate::fanfix::on(55) && self.blast_listed(tile) {
+                practise = false; // F55: 1.15m 0x3D4F7..0x3D509: a known (blast-listed) trap gives no practice
+            }
+            if ask {
                 let r = self.call(DISARM, &[slot, tile, g as i32, 0, 1]) as i32;
                 if r > 0 {
                     self.call(op::PICK_UP, &[slot, tile, 1]);
                     self.free_effect(tile);
-                    if spotted != 0 {
+                    // F56: 1.15m 0x3D5B6 jle: a negative answer (an effect on the own tile) counts no mine down.
+                    if spotted != 0 && (spotted as i8 > 0 || !crate::fanfix::on(56)) {
                         self.mines_down();
                     }
                 } else {
-                    if r == -1 {
+                    if r == -1 && practise {
                         self.ut_ge_put(g, 6, 0xFF);
                         practise = false;
                     }
@@ -327,7 +349,10 @@ impl Ai {
                         if j < 0xFF {
                             self.ut_ge_put(j, 2, self.ut_ge(j, 2).wrapping_neg());
                         } else {
-                            self.mines_down();
+                            // F56: 1.15m 0x3D609..0x3D614: a negative answer frees the effect only.
+                            if spotted as i8 > 0 || !crate::fanfix::on(56) {
+                                self.mines_down();
+                            }
                             self.free_effect(tile);
                         }
                     }
@@ -352,7 +377,8 @@ impl Ai {
         let me = self.rd8(0x17A);
         let mut tile = tile;
         // 1.
-        if tile != s16(self.rd16(0x114) as i32) {
+        let away = tile != s16(self.rd16(0x114) as i32);
+        if away {
             let d = self.direction_to(tile as u16) & 0xFF;
             let o = self.tb(tile, 1);
             let blocked = if (0x37..=0x82).contains(&o) {
@@ -366,9 +392,12 @@ impl Ai {
                 tile = super::search::step(tile, self.dir_step(d));
             }
         }
-        let put = |b6: u8| {
+        let put_at = |b6: u8, exact: u8, note: u8, near: u8| {
             let p = unsafe { (*self.w).soldiers.add(self.s * 0x200) };
-            crate::sector::put_item_at(self.w, self.h, tile, p, b6, 1, 0, 1);
+            crate::sector::put_item_at(self.w, self.h, tile, p, b6, exact, note, near)
+        };
+        let put = |b6: u8| {
+            put_at(b6, 1, 0, 1);
         };
         if self.rd8(0) == 0x11 {
             // 2.
@@ -386,6 +415,17 @@ impl Ai {
                 self.call(op::MESSAGE, &[MINE_BURIED]);
                 self.call(op::STAT_PRACTICE, &[slot, 6, 5, 0]);
             }
+        } else if crate::fanfix::on(49) {
+            // F49 (1.15m BuryMine 0x3CBB3..0x3CC36): put first, practise, then the blast at the tile PutItem chose.
+            self.wr8(2, 0xFF);
+            let low = self.rd8(0) < 0x11;
+            let at = put_at(if low { 0 } else { 1 }, away as u8, if low { 0xFF } else { 0 }, if low { 0 } else { 1 });
+            self.call(op::STAT_PRACTICE, &[slot, 6, 5, 0]);
+            self.wr8(0x1C9, super::aim::blast_kind(self.rd8(0)));
+            let combat = self.ut_w().combat;
+            let c = combat as i8 as i32;
+            let k = (combat as i32 * (self.random(2) + 1)) as u8;
+            self.call(op::EFFECT, &[s16(at), self.rd8(0x1C9) as i32, k as i32, 0x2134 - 6000 * c, 0x42, 1]);
         } else {
             // 3.
             self.wr8(2, 0xFF);
@@ -495,7 +535,8 @@ impl Ai {
 
 impl Ai {
     /// combat.md "A thrown item lands, exact steps" (op 176).
-    fn land_item(&self, tile: i32, item: u8, cond: i32, x: i32, y: i32) {
+    /// Returns the tile PutItem put the item on (1.15m reads it, fan fix F52; 1.13b leaves EAX unused).
+    fn land_item(&self, tile: i32, item: u8, cond: i32, x: i32, y: i32) -> i32 {
         let slot = self.slot();
         // 1.
         let mut e = [0u8; 12];
@@ -508,7 +549,7 @@ impl Ai {
             self.call(op::TRIGGER_ITEM, &[slot, tile, g as i32, 0]);
         }
         // 3.
-        crate::sector::put_item_at(self.w, self.h, tile, e.as_ptr(), 1, 0, 0, 0);
+        let landed = crate::sector::put_item_at(self.w, self.h, tile, e.as_ptr(), 1, 0, 0, 0);
         // 4.
         let (t0, t1) = (self.tb(tile, 0), self.tb(tile, 1));
         let (r, sample, kind);
@@ -532,6 +573,7 @@ impl Ai {
         // 6.
         let cls = self.t0_class(self.tb(tile, 0));
         self.call(op::MAKE_NOISE, &[self.rd8(0x17A) as i32, tile, cls as i32, r as i32, kind]);
+        landed
     }
 }
 
@@ -554,9 +596,12 @@ impl Ai {
             self.call(op::QUOTE_EVENT, &[me as i32, 0xFC, 1, NONE, 0]);
         }
         // 3.
-        self.call(MINE_SPOTTED, &[slot, t, g as i32]);
-        // 4.
-        let c = self.effect_here(t);
+        let m = self.call(MINE_SPOTTED, &[slot, t, g as i32]) as u8 as i8;
+        // 4. F56: 1.15m PickUpHere? 0x3CEC0 drops the FxHere? call (MineSpotted? makes it) and keeps MineSpotted?'s
+        //    signed answer: > 0 a mine (count down), < 0 an effect on the own tile.
+        let f56 = crate::fanfix::on(56);
+        let c = if f56 { m != 0 } else { self.effect_here(t) };
+        let down = !f56 || m > 0;
         // 5.
         self.wr8(0x1D8, 0x40);
         self.wr8(0x1C2, 0x40);
@@ -569,7 +614,7 @@ impl Ai {
             if r > 0 {
                 self.call(op::PICK_UP, &[slot, t, 1]);
                 self.free_effect(t);
-                if c {
+                if c && down {
                     self.mines_down();
                 }
             } else if c {
@@ -577,7 +622,9 @@ impl Ai {
                 if j < 0xFF {
                     self.ut_ge_put(j, 2, self.ut_ge(j, 2).wrapping_neg());
                 } else {
-                    self.mines_down();
+                    if down {
+                        self.mines_down();
+                    }
                     self.free_effect(t);
                 }
             }
@@ -615,6 +662,14 @@ impl Ai {
     }
     fn blast_listed(&self, t: i32) -> bool {
         (0..30i64).any(|k| self.blast_word(k) == t)
+    }
+    /// BlastListRemove? 0x3B718: the first word equal to `t` -> 0xC41.
+    fn blast_list_remove(&self, t: i32) {
+        let p = self.ut_w().blast_list;
+        if let Some(k) = (0..30i64).find(|&k| self.blast_word(k) == t) {
+            put(p, BLAST_LIST_LEN, 2 * k, NONE as u8);
+            put(p, BLAST_LIST_LEN, 2 * k + 1, (NONE >> 8) as u8);
+        }
     }
     /// Blast list add (combat.md).
     fn blast_list_add(&self, t: i32) {
@@ -668,6 +723,22 @@ impl Ai {
 impl Ai {
     /// combat.md "Mine spotted, exact steps" (op 247).
     fn mine_spotted(&self, tile: i32, g: u8) -> u8 {
+        if crate::fanfix::on(56) {
+            // F56 (1.15l changelog: a trapped explosive taken through some item routes skipped the defuse check;
+            // found by DarzaR): 1.15m MineSpotted? 0x3C328 -> cave 0x42770 returns 0 for ground entry 0xFF;
+            // 0x3C346 -> cave 0x1B6D6: types 0x16/0x18/0x1A/0x1C/0x1D return -FxHere?(soldier) (own tile).
+            if g == 0xFF {
+                return 0;
+            }
+            let ty = self.ut_ge(g, 0);
+            if ty != 0x11 {
+                return if matches!(ty, 0x16 | 0x18 | 0x1A | 0x1C | 0x1D) {
+                    (self.effect_here(s16(self.rd16(0x114) as i32)) as u8).wrapping_neg()
+                } else {
+                    0
+                };
+            }
+        }
         // 1.
         if self.ut_ge(g, 0) != 0x11 || self.ut_ge(g, 6) as i8 != -1 || self.rd8(0x17A) >= 8 || self.ut_ge(g, 2) as i8 <= 0 {
             return 0;
@@ -684,6 +755,9 @@ impl Ai {
     /// Tile byte 1 = 0 and all move codes rebuilt (a blue flag removed).
     fn remove_flag(&self, tile: i32) {
         self.ut_tile_put(tile, 1, 0);
+        if crate::flag_cleared_codes(self.w, tile) {
+            return;
+        }
         let w = self.ut_w();
         // SPEC GAP: a null tiles, t0_class, t1_class or move_codes buffer skips the rebuild.
         if w.tiles.is_null() || w.t0_class.is_null() || w.t1_class.is_null() || w.move_codes.is_null() {
@@ -912,14 +986,15 @@ pub extern "C" fn ja1_use_on_tile(w: *mut Ja1World, h: *const Ja1Host, slot: i32
 }
 
 /// Op 176 land_item for `Ai::dispatch`.
-pub(super) fn land_item(w: *mut Ja1World, h: *const Ja1Host, slot: i32, tile: i32, item: u8, cond: i32, x: i32, y: i32) {
+pub(super) fn land_item(w: *mut Ja1World, h: *const Ja1Host, slot: i32, tile: i32, item: u8, cond: i32, x: i32, y: i32) -> i32 {
     if let Some(a) = Ai::new(w, h, slot) {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| a.land_item(tile, item, cond, x, y)));
+        return std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| a.land_item(tile, item, cond, x, y))).unwrap_or(tile);
     }
+    tile
 }
 
 #[no_mangle]
-pub extern "C" fn ja1_land_item(w: *mut Ja1World, h: *const Ja1Host, slot: i32, tile: i32, item: i32, cond: i32, x: i32, y: i32) {
+pub extern "C" fn ja1_land_item(w: *mut Ja1World, h: *const Ja1Host, slot: i32, tile: i32, item: i32, cond: i32, x: i32, y: i32) -> i32 {
     land_item(w, h, slot, tile, item as u8, cond, x, y)
 }
 

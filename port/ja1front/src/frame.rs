@@ -151,13 +151,14 @@ pub struct Look {
 pub fn look() -> &'static Look {
     static L: std::sync::OnceLock<Look> = std::sync::OnceLock::new();
     L.get_or_init(|| {
+        use ja1front::config::read as r;
         let var = |k: &str| std::env::var(k).ok();
         Look {
-            scale: var("JA1_WINDOW_SCALE").and_then(|v| v.parse().ok()).filter(|s| (1..=8).contains(s)).unwrap_or(4),
-            fullscreen: var("JA1_FULLSCREEN").is_some_and(|v| v == "1"),
-            smooth: var("JA1_PIXELS").is_some_and(|v| v == "smooth"),
-            scanlines: var("JA1_SCANLINES").is_some_and(|v| v == "1"),
-            pointer: var("JA1_POINTER_SPEED").and_then(|v| v.parse().ok()).filter(|f: &f32| (0.25..=4.0).contains(f)).unwrap_or(1.0),
+            scale: r::window_size(var("JA1_WINDOW_SCALE").as_deref()),
+            fullscreen: r::fullscreen(var("JA1_FULLSCREEN").as_deref()),
+            smooth: r::soft_pixels(var("JA1_PIXELS").as_deref()),
+            scanlines: r::scanlines(var("JA1_SCANLINES").as_deref()),
+            pointer: r::pointer_speed(var("JA1_POINTER_SPEED").as_deref()),
         }
     })
 }
@@ -179,7 +180,7 @@ pub fn scanline_rects(fx: i32, fy: i32, fw: u32, fh: u32, rows: u32) -> Vec<sys:
 /// game window's default; JA1_MOUSE=desktop gives the desktop pointer (the window tests, which move it with XTEST).
 pub fn dos_mode() -> bool {
     static M: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *M.get_or_init(|| std::env::var("JA1_MOUSE").map_or(true, |v| v != "desktop")) || DOS_TEST.load(std::sync::atomic::Ordering::Relaxed)
+    *M.get_or_init(|| ja1front::config::read::capture_mouse(std::env::var("JA1_MOUSE").ok().as_deref())) || DOS_TEST.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The game window starts the DOS mouse mode (after its pointer shapes): the mouse is captured.

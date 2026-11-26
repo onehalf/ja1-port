@@ -16,14 +16,22 @@ fn sector8(w: *mut Ja1World, c: u8, i: usize) -> u8 {
 /// Leave path: runs once when the tactical loop's leave counter is not 0.
 pub(super) fn leave_path(w: *mut Ja1World, h: *const Ja1Host) {
     let Some(a) = Ai::new(w, h, 0) else { return };
+    // Fan fix F28 (1.15m TacticalLoop 0x11358..0x113EA, #70 row 17): the fade out and the End of day screen come
+    // after the cleanup, so the battle show of guards and enemies still in the sector after the last turn plays on
+    // a lit screen (1.13b fades first: the show is black).
+    let late = crate::fanfix::on(28);
     // 1.
-    a.call(op::FADE, &[0, 0x38, 0x100, 0]);
+    if !late {
+        a.call(op::FADE, &[0, 0x38, 0x100, 0]);
+    }
     a.call(op::CURSOR_BACK, &[]);
     a.call(op::MUSIC_STOP, &[]);
     // 2.
     if unsafe { (*w).quit_tactical == 0 && (*w).leave_reason == 0 } {
         // a.
-        a.call(op::END_OF_DAY, &[]);
+        if !late {
+            a.call(op::END_OF_DAY, &[]);
+        }
         // b.
         let c = unsafe { (*w).cur_sector };
         if sector8(w, c, 2) != 0 {
@@ -33,12 +41,18 @@ pub(super) fn leave_path(w: *mut Ja1World, h: *const Ja1Host) {
         }
         // c.
         a.call(op::LEAVE_SECTOR, &[1]);
+        if late {
+            a.call(op::FADE, &[0, 0x38, 0x100, 0]);
+            a.call(op::END_OF_DAY, &[]);
+        }
         // d.
         unsafe {
             if (*w).santino_spoke != 0 && (*w).leave_reason == 0 {
                 (*w).leave_reason = 1;
             }
         }
+    } else if late {
+        a.call(op::FADE, &[0, 0x38, 0x100, 0]);
     }
     // 3.
     a.call(op::TIMER_OFF, &[]);
@@ -101,6 +115,11 @@ pub(super) fn leave_sector(w: *mut Ja1World, h: *const Ja1Host, flag: i32) {
         }
     } else if b0 & 1 == 0 {
         a.call(op::SECTOR_GAINED, &[c as i8 as i32]);
+        // F22 (1.15m 0x30F7D -> cave 0x4889B): the territory totals and workable trees are counted again at once,
+        // so the day-end retreat test sees the sector as won (ResolveSectorBattle above ends with this recount).
+        if crate::fanfix::on(22) {
+            super::ledger::recalc_territory(w);
+        }
     }
     // 6.
     a.call(op::SAVE_TMP, &[]);
@@ -200,7 +219,13 @@ fn retreat(w: *mut Ja1World, h: *const Ja1Host) {
         }
     }
     // 2.
-    let risk = 30 * ((b & 1 == 0) as i32 + way_out as i32);
+    // F21 (1.15m 0x30B28 / 0x30C4C): a way out lowers the risk instead of raising it (2 for an unowned sector, minus
+    // the way out); the risk can be -30 then, and no merc gets hit.
+    let risk = if crate::fanfix::on(21) {
+        30 * (2 * (b & 1 == 0) as i32 - way_out as i32)
+    } else {
+        30 * ((b & 1 == 0) as i32 + way_out as i32)
+    };
     // 3.
     for k in 0..8 {
         let Some(m) = Ai::new(w, h, k) else { return };

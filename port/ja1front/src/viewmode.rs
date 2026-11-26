@@ -114,7 +114,8 @@ impl ViewMode {
                         self.strips += 1;
                     }
                 }
-                if cur == 1 {
+                // Port fix P15 (#2 row 33): the overview holds mode-1 coordinates, so 0 -> 2 / 3 shifts as 1 -> 2 / 3 does.
+                if cur == 1 || (cur == 0 && ja1logic::fanfix::port_on(15)) {
                     self.view_x = self.view_x.wrapping_sub(48);
                 }
                 self.last_wide = (m as i8 - 2) as i32;
@@ -144,6 +145,15 @@ impl ViewMode {
                     self.mouse_x = col.wrapping_mul(4).wrapping_add(48);
                     self.mouse_y = row.wrapping_mul(3).wrapping_add(14);
                     self.mouse_moves += 1;
+                }
+                // Port fix P15 (#2 row 33): 2 / 3 -> 0 takes back the wide-view shifts (after the mouse point, which the
+                // shown view gives), so the overview holds mode-1 coordinates and 0 -> 1 lands where 1 left.
+                let o = self.old_mode as u8 as i8;
+                if o >= 2 && ja1logic::fanfix::port_on(15) {
+                    self.view_x = self.view_x.wrapping_add(48);
+                    if o == 3 {
+                        self.view_y = self.view_y.wrapping_add(14);
+                    }
                 }
                 self.window(14, 14, 12);
                 self.small_panel = 0;
@@ -178,6 +188,14 @@ impl ViewMode {
         if self.mode as u8 != 0 {
             self.filter = 1;
             self.set(0);
+        } else if ja1logic::fanfix::on(45) {
+            // F45 (1.15l changelog, "the Insert button now correctly toggles between fog-of-war and fully revealed
+            // map views", found by DarzaR; 1.15m TacticalKeyHandler 0x137E2): in the overview Insert clears filter
+            // bit 0 (fog of war off: the whole map); with the filter on the overview is set again, with it off the normal
+            // view (mode 1) comes back.
+            let old = self.filter as u8 & 1;
+            self.filter = (self.filter as u8 & 0xFE) as i32;
+            self.set(if old != 0 { 0 } else { 1 });
         } else {
             self.filter = (self.filter as u8 & 1) as i32;
         }
@@ -256,6 +274,10 @@ pub enum OvCall {
     Occupant(i32),
     /// The hp byte (+0x183) of soldier o, signed.
     Hp(u8),
+    /// The visible byte (+0x9C) of soldier o, signed (#70 F46 only; o = 0..0x3F or 0x80..0xFF).
+    Visible(u8),
+    /// CursorItemBack? 0x53660: a held item goes back to the old merc (#70 F61 only).
+    CursorBack,
     /// Select merc (o, force 0, quote 1).
     Select(u8),
     NotAvailable,
@@ -293,11 +315,21 @@ impl OvMouse {
         }
         let o = call(OvCall::Occupant(t)) as u8;
         if self.buttons & 1 != 0 {
-            if press_walks(o, self.sel_hp) {
+            let fan = ja1logic::fanfix::on(46);
+            // #70 F46 (1.15m 0x24733 -> helper 0x2C57C): a soldier tile walks unless that soldier is seen.
+            let vis = if fan && !(o < 8 && self.sel_hp as u8 != 0) && (o as i8) < 0x40 { call(OvCall::Visible(o)) } else { 0 };
+            if press_walks(o, self.sel_hp, vis) {
                 call(OvCall::Walk(t));
             } else if o < 8 && self.sel_hp as u8 != 0 {
                 if call(OvCall::Hp(o)) as i8 > 14 {
+                    // #70 F61 (row 87): 1.15m 0x24727 calls cave 0x8AF04: CursorItemBack? 0x53660, then SelectMerc?.
+                    if ja1logic::fanfix::on(61) {
+                        call(OvCall::CursorBack);
+                    }
                     call(OvCall::Select(o));
+                } else if fan {
+                    // #70 F46 (1.15m 0x2471A): a merc under 15 hp gives "Not available!" in place of nothing.
+                    call(OvCall::NotAvailable);
                 }
             } else {
                 call(OvCall::NotAvailable);
@@ -556,23 +588,31 @@ pub unsafe extern "C" fn ja1f_scroll(s: *mut Scroll, v: *mut ViewMode, cursor_ti
 }
 
 /// OverviewMouse 0x24630, left press: only a tile with no soldier (and with a living selected merc or none on it) reaches
-/// AllMoveTraverse?, so only this press starts the edge drag.
-pub fn press_walks(o: u8, sel_hp: i32) -> bool {
-    !(o < 8 && sel_hp as u8 != 0) && o >= 0x40
+/// AllMoveTraverse?, so only this press starts the edge drag. `vis` = the visible byte (+0x9C, signed) of soldier o.
+/// #70 F46 (1.15m helper 0x2C57C, a signed byte compare): o 0x40..0x7F walks, and any other o walks when vis <= 0.
+pub fn press_walks(o: u8, sel_hp: i32, vis: i32) -> bool {
+    if o < 8 && sel_hp as u8 != 0 {
+        return false;
+    }
+    if ja1logic::fanfix::on(46) {
+        (o as i8) >= 0x40 || vis <= 0
+    } else {
+        o >= 0x40
+    }
 }
 
 /// Test entry for validate/diff/ovmouse_diff.py: `v` = the 17 values of `OvMouse` (in / out); `ans` = the answers
-/// (occupant, hp of the occupant, cost); `log` gets the calls (2 int32 each: kind 1 show mouse, 2 hide marks, 3
+/// (occupant, hp of the occupant, cost, visible byte of the occupant); `log` gets the calls (2 int32 each: kind 1 show mouse, 2 hide marks, 3
 /// select, 4 not available, 5 walk, 6 cost, 7 jump; then the slot or tile; at most 16 calls). Returns the count.
 ///
 /// # Safety
-/// `v` points to 17 int32 values, `ans` to 3, `log` to 32.
+/// `v` points to 17 int32 values, `ans` to 4, `log` to 32.
 #[no_mangle]
 pub unsafe extern "C" fn ja1f_ov_mouse(v: *mut OvMouse, ans: *const i32, log: *mut i32) -> i32 {
     if v.is_null() || ans.is_null() || log.is_null() {
         return -1;
     }
-    let (v, ans, log) = (&mut *v, std::slice::from_raw_parts(ans, 3), std::slice::from_raw_parts_mut(log, 32));
+    let (v, ans, log) = (&mut *v, std::slice::from_raw_parts(ans, 4), std::slice::from_raw_parts_mut(log, 32));
     let mut n = 0usize;
     let mut put = |k: i32, a: i32| {
         if n < 16 {
@@ -584,6 +624,7 @@ pub unsafe extern "C" fn ja1f_ov_mouse(v: *mut OvMouse, ans: *const i32, log: *m
     v.step(&mut |c| match c {
         OvCall::Occupant(_) => ans[0],
         OvCall::Hp(_) => ans[1],
+        OvCall::Visible(_) => ans[3],
         OvCall::ShowMouse => { put(1, 0); 0 }
         OvCall::HideMarks => { put(2, 1); 0 }
         OvCall::Select(o) => { put(3, o as i32); 0 }
@@ -591,6 +632,7 @@ pub unsafe extern "C" fn ja1f_ov_mouse(v: *mut OvMouse, ans: *const i32, log: *m
         OvCall::Walk(t) => { put(5, t); 0 }
         OvCall::Cost(t) => { put(6, t); ans[2] }
         OvCall::Jump => { put(7, 0); 0 }
+        OvCall::CursorBack => { put(8, 0); 0 }
     });
     n as i32
 }

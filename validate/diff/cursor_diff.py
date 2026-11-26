@@ -2,7 +2,10 @@
 front-end (port/ja1front ja1f_cursor_draw) vs the original DrawTargetMark? 0x16DD0 + DrawCursorPass? 0x171E8 in
 Unicorn on a zeroed back buffer.
 
-usage: .venv/bin/python validate/diff/cursor_diff.py [ncases=3000] [DUMP] [--lib SO]
+usage: .venv/bin/python validate/diff/cursor_diff.py [ncases=3000] [DUMP] [--lib SO] [--fan 46]
+--fan 46 (#70 F46, row 60 part): the original runs the 1.15m DrawTargetMark? bytes + helper 0x2C57E, the port fan
+fix F46; the occupant's visible byte +0x9C is fuzzed. SPEC GAP: occupants 0x30..0x3F are left out (the 1.15m helper
+reads past the soldier table there; the port has no such slots).
 Per case: the mouse tile (in the view, near it, off it), its occupant, the cursor value (used values + any 0..0xB5),
 mode, out of range, combat, AP number + colours, blink timer / phase / no_blink, under_soldier, door wobble clock /
 direction / offsets, the hover label (text, place; label_x -1 = none), the three gate flags, and the tile marker
@@ -24,7 +27,8 @@ from csprite import palette          # noqa: E402
 argv = sys.argv[1:]
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
-args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] != "--lib")]
+args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
+FAN = "--fan" in argv
 ncases = int(args[0]) if args and args[0].isdigit() else 3000
 dump = next((a for a in args if not a.isdigit()), os.path.join(ROOT, "build", "mem_fight59.bin"))
 
@@ -49,6 +53,8 @@ PORT.ja1f_cursor_draw.argtypes = [ctypes.c_char_p, ctypes.c_char_p, i32, ctypes.
 PORT.ja1f_cursor_draw.restype = i32
 PORT.ja1f_cursor_dead_fix.argtypes = [i32, i32, i32, i32]
 PORT.ja1f_cursor_dead_fix.restype = i32
+PORT.ja1_fan_fixes_set.argtypes = [ctypes.c_uint64]
+PORT.ja1_fan_fixes_set((1 << 45) if FAN else 0)
 ISO, EXE = os.path.join(ROOT, "rom", "JA1.gog").encode(), os.path.join(ROOT, "build", "game113b", "JA.EXE").encode()
 
 BACK, BW, BH = 0x22A4EF, 384, 854
@@ -69,6 +75,8 @@ VALUES = [0x8E, 0x8F, 0x90, 0x91, 0xB5, 0xA1, 0xA4, 0x94, 0x77, 0x8C, 0x92, 0x95
 LABELS = [b"DYING", b"CRITICAL", b"WOUNDED", b"HEALTHY", b"SANTINO", b"Ivan", b"Hector", b"", b"Wi^de"]
 
 e = Emu(dump=dump, fast=True)
+if FAN:          # #70 F46: DrawTargetMark? call site + the helper in the freed InitSoldierNames bytes, and the tail
+    e.put_115m(only=[(0x16E12, 0x16E1A), (0x2C570, 0x2C5A7)])
 ts = e.r8(e.rt(0x22A038))
 pal = palette(ts)
 T0 = e.r32(e.rt(0xE8C48))            # pointer to remap table 0
@@ -117,6 +125,10 @@ def case(r):
     s["marker_blink"] = r.choice([200, 50, 1, 0, -10])
     s["marker_phase"] = r.randrange(2)
     occ = r.choice([0x40, 0x40, r.randrange(0x30), r.randrange(0x30, 0x80), r.randrange(0x80, 0x100)])
+    if FAN:
+        while 0x30 <= occ & 0x7F < 0x40:
+            occ = r.randrange(0x100)
+        s["vis"] = r.choice([0, 0, 1, 2, 0x7F, 0x80, 0xFF])
     # cursor.md "Soldier and tile marks": two soldier slots (merc / enemy / none), a view tile, the clock.
     s["shown_slot"] = r.choice([0x40, 0x40, r.randrange(0x28), r.randrange(0x30), 0x41, 0x100])
     s["spotted"] = r.choice([0x40, 0x40, r.randrange(0x28, 0x30), r.randrange(0x30)])
@@ -136,12 +148,15 @@ def case(r):
             sold[k] = (t, px[0], px[1])
     s["sold"] = sold
     s["obj"] = r.choice([None, 0, r.randrange(1, 256)])
+    s["occ"] = occ
     return s, occ
 
 
 def patch(soldiers, tm, s):
     for k, (t, x, y) in s["sold"].items():
         struct.pack_into("<hhh", soldiers, k * 512 + 0x114, t, x, y)
+    if "vis" in s and s["occ"] & 0x7F < 0x30:
+        soldiers[(s["occ"] & 0x7F) * 512 + 0x9C] = s["vis"]
     if s["obj"] is not None and s["view_tile"] < 3136:
         tm[s["view_tile"] * 8 + 1] = s["obj"]
 
@@ -226,5 +241,5 @@ for value in (0x91, 0xB5, 0xA4, 0x8F):
 e.uc.mem_write(sp, saved_soldier)
 e.w8(e.rt(0x284F1D), saved_value)
 e.w8(e.rt(0x284F1B), saved_mode)
-print(f"cursor_diff: {ncases} draw cases + {fix_cases} dead_fix cases, {bad} mismatches")
+print(f"cursor_diff{' --fan 46' if FAN else ''}: {ncases} draw cases + {fix_cases} dead_fix cases, {bad} mismatches")
 sys.exit(1 if bad else 0)

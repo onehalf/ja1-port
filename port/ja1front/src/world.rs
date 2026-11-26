@@ -1238,8 +1238,23 @@ impl World {
             let ob = old.save_bytes();
             save[2..28].copy_from_slice(&ob[2..28]);
             save[21538..21649].copy_from_slice(&ob[21538..21649]);
+            if ja1logic::fanfix::on(31) {
+                // #70 F31 (row 21): 1.15m NewGameInit 0x37B5A calls cave 0x18FE9: the found flags of the 15 one-off
+                // notes (g_notesFound 0x92ED2, {type, flag} pairs = save bytes 21619..21648) are cleared, so the
+                // next game places those notes again.
+                for k in 0..15 {
+                    save[21619 + 2 * k + 1] = 0;
+                }
+            }
         }
         let mut w = World::from_files(&exe, &jagged, &save)?;
+        if let Some(old) = old {
+            // 0x92E2D (the sector of the last listening device line) is in no day save and 1.13b's NewGameInit
+            // does not write it: it stays from the game before. #70 F31: the 1.15m cave 0x18FE9 sets it to 99.
+            if !ja1logic::fanfix::on(31) {
+                w.walter_sector = old.walter_sector;
+            }
+        }
         if edt.len() >= 5760 {
             w.profiles[5400..5760].copy_from_slice(&edt[5400..5760]);
         }

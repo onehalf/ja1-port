@@ -92,6 +92,33 @@ impl Ai {
     pub(super) fn u_class(&self, p: *const u8, v: u8) -> u8 {
         buf8(p, CLASS_LEN, v as usize)
     }
+    /// StepApCost 0x39B30 into tile t. #70 F68 (1.15m 0x39B83 -> cave 0x38427 / tail 0x8AFCD): the code 25300 on a
+    /// water tile (IsWaterTile of t0, t1: a broken bridge piece) costs +13, not +2.
+    pub(super) fn step_cost(&self, t: i32, sneak: u8, b177: u8, alt: u8) -> i32 {
+        let code = self.u_move_code(t);
+        let c = crate::step_ap(code, sneak, b177, alt);
+        if code == 25300 && crate::fanfix::on(68) && water_tile(self.tb(t, 0), self.tb(t, 1)) {
+            (c + 11) as i8 as i32
+        } else {
+            c
+        }
+    }
+    /// #70 F68 (1.15m EffectHit? 0x174E0 -> cave 0x54CB1, after LoadExplodeDat): every code 25300 on a water tile
+    /// with no 25400 among its 8 neighbours gets +200 (25500, no way in). Tiles 0xC3F down to 0.
+    pub(super) fn bridge_sweep(&self) {
+        for t in (0..TILES as i32).rev() {
+            if self.u_move_code(t) != 25300 || !water_tile(self.tb(t, 0), self.tb(t, 1)) {
+                continue;
+            }
+            let open = (1..=8).rev().any(|d| {
+                let n = super::search::step(t, self.dir_step(d));
+                self.u_move_code(n) == 25400
+            });
+            if !open {
+                self.u_move_code_put(t, 25500);
+            }
+        }
+    }
     pub(super) fn u_move_code(&self, t: i32) -> u16 {
         // Off-map tiles read 0.
         if !(0..TILES as i32).contains(&t) {
@@ -159,7 +186,7 @@ impl Ai {
     }
     /// Step AP of tile t (low byte).
     fn u_step_ap(&self, t: i32) -> u8 {
-        crate::step_ap(self.u_move_code(t), self.rd8(0x1A8), self.rd8(0x177), self.rd8(0x196)) as u8
+        self.step_cost(t, self.rd8(0x1A8), self.rd8(0x177), self.rd8(0x196)) as u8
     }
     /// Low-AP stop; `with_16b`: stop_timer only if +0x16B != 0.
     fn u_low_ap_stop(&self, with_16b: bool) {
@@ -178,6 +205,10 @@ impl Ai {
         self.wr16(0x134, NONE);
         self.wr8(0x1A7, 0);
         self.wr8(0x16D, 1);
+        // #70 F61 (row 87): 1.15m StepStart 0x1A650 + ActiveFrame 0x1BFBF call cave 0x8AF04 = CursorItemBack? first.
+        if crate::fanfix::on(61) {
+            self.call(op::CURSOR_BACK, &[]);
+        }
         self.call(op::LOW_AP_STOP, &[self.slot(), 1, 0]);
     }
     pub(super) fn u_forget_attack(&self, flag: bool) {
@@ -271,7 +302,13 @@ impl Ai {
         }
         self.wr16(0x116, x as u16);
         self.wr16(0x118, y as u16);
-        match self.rd8(0x1A2) {
+        let mut facing = self.rd8(0x1A2);
+        // #70 F48 (row 62; 1.15m WalkMove 0x1A057 -> cave 0x48250): while +0x196 is set (a backward walk) the tile bias
+        // uses the opposite facing: facing - 4 when it is above 4 (signed), else facing + 4 (so 4 gives 8, no bias).
+        if crate::fanfix::on(48) && self.rd8(0x196) != 0 {
+            facing = if facing as i8 > 4 { facing - 4 } else { facing.wrapping_add(4) };
+        }
+        match facing {
             2 => x += 5,
             4 => x += 1,
             6 => y += 3,
@@ -454,7 +491,11 @@ impl Ai {
         }
         // 2.
         self.call(op::STOP_ANIM, &[slot, self.u_stored_flag()]);
-        self.call(op::STOP_WALK, &[slot, 0]);
+        // Fan fix F14 (#70 row 8; changelog 1.15z, found by DarzaR; 1.15m WalkEnd 0x1B98F, StopWalk 0x104D7 +
+        // 0x1053A): the walk ends with StopWalk(-1), which turns the busy display off even when this merc is no longer
+        // the selected one (an interrupt at the goal tile selected another), so no Escape is needed to get control back.
+        let flag = if crate::fanfix::on(14) { -1 } else { 0 };
+        self.call(op::STOP_WALK, &[slot, flag]);
         self.wr8(0x1B8, 1);
         // 3.
         if self.s >= 0x28 {
@@ -839,6 +880,15 @@ impl Ai {
             // occupied = (byte 5 & 0x7F) < 0x30; find_path treats a value below 0x40 as occupied.
             occ[t] = self.occupant(t as u16);
         }
+        // #70 F47 (row 61; 1.15m FindPath 0x40B52 -> helper 0x2C57E with AH = 1): for a merc (slot +0x17A <= 7) a soldier
+        // whose visible byte +0x9C is 0 or below (signed) does not occupy its tile; for others nothing changes.
+        if crate::fanfix::on(47) && self.rd8(0x17A) <= 7 {
+            for o in occ.iter_mut() {
+                if *o < 0x30 && self.rd8_of(*o as usize, 0x9C) as i8 <= 0 {
+                    *o = crate::ai::NO_SLOT;
+                }
+            }
+        }
         let p = crate::PathIn {
             codes: &codes,
             ground: &ground,
@@ -905,7 +955,7 @@ impl Ai {
                 // 3.1
                 let d = (pd(k) + 1) & 0xFF;
                 t = step(t, self.dir_step(d));
-                c = c.wrapping_add(crate::step_ap(self.u_move_code(t), sneak, b177, alt));
+                c = c.wrapping_add(self.step_cost(t, sneak, b177, alt));
                 // 3.2
                 if k == 0 {
                     set_walk(c);
@@ -1390,6 +1440,12 @@ impl Ai {
     }
 
     // ---- Step start ----
+    /// 0x3B6F0: the tile is one of the 30 u16 entries of the blast list (world blast_list).
+    fn u_in_blast_list(&self, t: i32) -> bool {
+        let bl = unsafe { (*self.w).blast_list };
+        (0..30i64).any(|i| super::damage::get16(bl, 60, 2 * i) as i16 as i32 == t)
+    }
+
     fn u_step_start(&self) -> bool {
         let slot = self.slot();
         // 1.
@@ -1415,8 +1471,9 @@ impl Ai {
         if self.s < 8 && self.u_ap_warned() == 0 && self.rd8(0x16B) == 1 {
             have = have.wrapping_sub(self.rd8(0xEF));
         }
-        // 4.
-        if self.w_combat() && ap > have {
+        // 4. F24 (1.15m StepStart 0x1A587 jle): a signed compare, so AP below the reserve (have < 0) stops too.
+        let short = if crate::fanfix::on(24) { ap as i8 > have as i8 } else { ap > have };
+        if self.w_combat() && short {
             self.call(op::STOP_WALK, &[slot, 0]);
             self.wr8(0x197, 1);
             if ap as i32 > self.s8(0x1A5) {
@@ -1452,6 +1509,13 @@ impl Ai {
             && self.s8(0x192) >= (self.u_ground(g, 2) as i8 as i32).abs()
         {
             go = false;
+            // F25 (1.15m StepStart 0x1A757 block): a mine not yet in the blast list (0x3B6F0) gives two practice rolls,
+            // stats 4 and 6, n = |ground byte 2| / 2, flag 0, before the trigger message.
+            if crate::fanfix::on(25) && !self.u_in_blast_list(nt) {
+                let n = (self.u_ground(g, 2) as i8 as i32).abs() >> 1;
+                self.call(op::STAT_PRACTICE, &[slot, 4, n, 0]);
+                self.call(op::STAT_PRACTICE, &[slot, 6, n, 0]);
+            }
             self.u_fire_trigger(0xFF, true);
             self.call(op::MINE_FLAG, &[slot, nt]);
         }
@@ -1645,7 +1709,11 @@ impl Ai {
             self.wr16(0x106, NONE);
         }
         // 2. Sneak practice.
-        if self.s < 8 && self.rd8(0x1A8) != 0 && self.s8(0x1D5) > 0 {
+        // F70: 1.15m change with no changelog line; found in the jam115.exe bytes (ActiveFrame 0x1BA9F/0x1BB0C),
+        // patch by DarzaR. The +0x193 test (a step was taken) moves in front of the loop, so the agility rolls run
+        // once per step, not on every call at a step point (step 3 below has the same test).
+        let gate = !crate::fanfix::on(70) || self.rd8(0x193) != 0;
+        if gate && self.s < 8 && self.rd8(0x1A8) != 0 && self.s8(0x1D5) > 0 {
             for j in 0..8usize {
                 if self.rd8(0x13A + j) == 1 && self.rd8_of(0x28 + j, 0x13A + self.s) != 1 {
                     self.call(op::STAT_PRACTICE, &[slot, 2, 1, 0]);
@@ -1697,6 +1765,11 @@ impl Ai {
             }
             if unsafe { (*self.w).interrupt_go } != 0 {
                 self.call(op::MERC_INTERRUPT, &[]);
+                // F29 (rows 18/35, 1.15m ActiveFrame 0x1BCEB): the merc interrupt drops a guard interrupt queued on
+                // the same enemy step (0x92DD0 = 0), so the guard turn no longer follows and stops the merc.
+                if crate::fanfix::on(29) {
+                    unsafe { (*self.w).turn_moves = 0 };
+                }
                 *ended = true;
             } else if self.u_turn_moves() {
                 self.call(op::NEXT_TURN, &[0]);
@@ -1761,7 +1834,9 @@ impl Ai {
                             if self.u_ap_warned() == 0 && self.rd8(0x16B) != 0 {
                                 have = have.wrapping_sub(self.rd8(0xEF));
                             }
-                            warn = self.w_combat() && c > have && self.rd8(0x16B) != 0;
+                            // F24 (row 58, 1.15m ActiveFrame 0x1BF44 jle): signed, so AP below the reserve refuses the use too.
+                            let short = if crate::fanfix::on(24) { c as i8 > have as i8 } else { c > have };
+                            warn = self.w_combat() && short && self.rd8(0x16B) != 0;
                         }
                         if warn {
                             self.u_low_ap_stop(false);
@@ -1885,7 +1960,10 @@ impl Ai {
         (0..8).any(|k| {
             self.rd8_of(k, 0x182) != 0
                 && self.rd8_of(k, 0x138) != 0
-                && (self.u_s8_of(k, 0x1D5) >= 1 || self.rd8_of(k, 0x1C4) != 0)
+                && (self.u_s8_of(k, 0x1D5) >= 1
+                    // #70 F39: 1.15m MercBusy? 0x1F707 -> tail 0x8AF96: a duty byte other than 0 is busy too.
+                    || (crate::fanfix::on(39) && self.rd8_of(k, 0x17E) != 0)
+                    || self.rd8_of(k, 0x1C4) != 0)
         })
     }
     fn u_item_type_byte(&self, i: usize) -> u8 {
@@ -1978,6 +2056,10 @@ impl Ai {
                                 {
                                     unsafe { (*self.w).spot_stop = 1 };
                                     self.wr8(0x16D, 1);
+                                    // #70 F61 (row 87): 1.15m MercView 0x14C75 calls cave 0x8AF04 = CursorItemBack? first.
+                                    if crate::fanfix::on(61) {
+                                        self.call(op::CURSOR_BACK, &[]);
+                                    }
                                     self.call(op::LOW_AP_STOP, &[slot, 1, 0]);
                                 }
                                 self.call(op::STAT_PRACTICE, &[slot, 4, 1, 0]);
@@ -2304,7 +2386,9 @@ fn tick(w: *mut Ja1World, h: *const Ja1Host) {
             continue;
         }
         if buf8(fx, FX_LEN, b + 9) as i8 <= 0 {
-            let n = e.wrapping_sub(10);
+            // F18: 1.15m counts down by the tick step 0x92F60 (1000 with time compression on), not 10.
+            let step = if crate::fanfix::on(18) { unsafe { (*w).tick_step } } else { 10 };
+            let n = e.wrapping_sub(step);
             fx_put_i32(fx, b, if n <= 0 { 0 } else { n });
         }
         unsafe {
@@ -2406,6 +2490,10 @@ fn fuses(w: *mut Ja1World, h: *const Ja1Host) {
         }
         fx_put_i32(fx, b, -1);
         let tile = i16::from_le_bytes([buf8(fx, FX_LEN, b + 6), buf8(fx, FX_LEN, b + 7)]) as i32;
+        if crate::fanfix::on(18) {
+            // F18 (1.15m 0x1125D): each effect that goes off turns time compression off.
+            crate::ai::clock::time_compress(w, h, 0);
+        }
         let k = buf8(fx, FX_LEN, b + 8);
         let owner = buf8(fx, FX_LEN, b + 0xB) as i32;
         if tile < NONE_I {
@@ -2462,7 +2550,8 @@ fn loop_head(w: *mut Ja1World, h: *const Ja1Host) -> i32 {
     let mercs = buf8(ss, SECTOR_STATE_LEN, 9 * cs + 2);
     if enemies != 0 {
         if unsafe { (*w).combat } == 0 && mercs != 0 {
-            // Combat starts.
+            // Combat starts: time compression off first (TimeCompress(0) at 0x10986), then combat = 1.
+            crate::ai::clock::time_compress(w, h, 0);
             unsafe { (*w).combat = 1 };
             a0.call(op::MOUSE_SAVE, &[]);
             if unsafe { (*w).merc_to_show } >= 8 {

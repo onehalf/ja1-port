@@ -48,9 +48,48 @@ pub fn volumes() -> Volumes {
     *VOLUMES.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The loudness cap of a volume key: 100 in 1.13b; 127 under port fix P17 (#2 row 40), the AIL master range.
+fn volume_cap() -> i32 {
+    if ja1logic::fanfix::port_on(17) { 127 } else { 100 }
+}
+
+/// InitAil 0x5C25E / 0x5C351 sets the numbers to 100 / 70 but never sends them, so both AIL masters stay at 127 and
+/// the first louder key makes the game quieter (#2 row 40). Port fix P17 (#71) starts the numbers at 127, the
+/// loudness the game starts with (the first louder press changes nothing). Call it once after the fix level is set.
+pub fn start_volumes() {
+    if ja1logic::fanfix::port_on(17) {
+        set_volumes(Volumes { music: 127, sound: 127 });
+    }
+}
+
 /// Quick Restore reads both numbers back (QuickRestore 0x2D688 / 0x2D6BC) without sending them to AIL.
 pub fn set_volumes(v: Volumes) {
     *VOLUMES.lock().unwrap_or_else(|e| e.into_inner()) = v;
+}
+
+/// The part of a battle sound that plays: two stream buffers (32768 bytes) in 1.13b (#2 row 56); port fix P13 (#71)
+/// plays all of it (a new round's sound still stops the old one, as in the original).
+fn battle_part(d: &[u8]) -> &[u8] {
+    if ja1logic::fanfix::port_on(13) {
+        d
+    } else {
+        &d[..d.len().min(2 * STREAM_BUFFER)]
+    }
+}
+
+/// Unit tests that change the shared port fix mask take this lock first.
+#[cfg(test)]
+pub(crate) static TEST_FIX_MASK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Quick Restore's volume numbers (QuickRestore 0x2D688 / 0x2D6BC). 1.13b reads them back without sending them to AIL,
+/// so the old loudness stays until a volume key (#2 row 41); port fix P09 sends both as the master volumes, as a volume
+/// key does (0x5CEB4 XMIDI, 0x5CE94 digital).
+pub fn restore_volumes(v: Volumes) {
+    set_volumes(v);
+    if ja1logic::fanfix::port_on(9) {
+        crate::music::with(|mu| mu.set_master(v.music));
+        set_digital_master(v.sound);
+    }
 }
 
 /// What a volume key sends to AIL.
@@ -66,7 +105,7 @@ pub enum MasterSet {
 pub fn volume_key(key: u8, v: &mut Volumes) -> Option<MasterSet> {
     match key {
         b'+' => {
-            v.music = v.music.wrapping_add(1).min(100);
+            v.music = v.music.wrapping_add(1).min(volume_cap());
             Some(MasterSet::Music(v.music))
         }
         b'-' => {
@@ -74,7 +113,7 @@ pub fn volume_key(key: u8, v: &mut Volumes) -> Option<MasterSet> {
             Some(MasterSet::Music(v.music))
         }
         b'.' => {
-            v.sound = v.sound.wrapping_add(1).min(100);
+            v.sound = v.sound.wrapping_add(1).min(volume_cap());
             Some(MasterSet::Digital(v.sound))
         }
         b',' => {
@@ -401,7 +440,11 @@ impl Sound {
 
     /// SpeechStream 0x5CC6C loads one buffer of 0x4000 bytes and ShowMessage? 0x27B98 runs no SpeechRefill? 0x5CCF8: under
     /// a box the voice goes silent at byte 0x4000 and stays busy (live: position 16384, status 4, until the box ends).
+    /// Port fix P12 (#71, #2 row 55): at level `all` the voice plays on under the box (no stall).
     pub fn speech_stall(&mut self) {
+        if ja1logic::fanfix::port_on(12) {
+            return;
+        }
         if let Some(c) = self.speech.as_mut() {
             c.stall_at = Some((STREAM_BUFFER as u64) << 16);
         }
@@ -446,7 +489,7 @@ impl Sound {
         let Some(d) = self.speech_seek(arc.as_deref(), name) else { return false };
         // ResolveSectorBattle 0x3E508 runs one SpeechRefill? 0x5CCF8 after each SpeechStream 0x5CC6C, and the next round starts
         // a new stream: a battle sound stops after two buffers (32768 bytes, 2.97 s; all of them are longer).
-        self.speech_raw(&format!("battle:{}", name), 0x2B11, 0x58, &d[..d.len().min(2 * STREAM_BUFFER)]);
+        self.speech_raw(&format!("battle:{}", name), 0x2B11, 0x58, battle_part(&d));
         true
     }
 
@@ -738,7 +781,13 @@ impl Sound {
         let Ok(arc) = cd.read(&format!("NAMES\\{}", p)) else { return };
         // A missing member (speaker 29 has no 40.VOC): ArcSeek does not seek and keeps the size, so LoadVocSample 0x5C960 reads
         // the old size of bytes from the place behind the directory read (OpenFileOrCD? 0x53338: 0x50 records of 0x20 B).
+        // Port fix P18 (#71, #2 row 51): a missing member gives no name (silence where it goes); the kept size becomes
+        // the VOC header alone (0x22), as the fixed original's LoadVocSample.
         let d = self.seek_member(&arc, &format!("{:02}.VOC", m)).unwrap_or_else(|| {
+            if ja1logic::fanfix::port_on(18) {
+                self.last_size.set(0x22);
+                return Vec::new();
+            }
             let n = self.last_size.get();
             arc.get(0xA00..).map(|r| r[..n.min(r.len())].to_vec()).unwrap_or_default()
         });
@@ -1189,6 +1238,9 @@ mod stall_tests {
     /// SpeechStream 0x5CC6C + ShowMessage? 0x27B98: live in the original, position 16384 and status 4 until the box ended.
     #[test]
     fn a_stalled_voice_stops_at_one_buffer_and_stays_busy() {
+        let _lock = crate::sound::TEST_FIX_MASK.lock().unwrap_or_else(|e| e.into_inner());
+        let mask = ja1logic::fanfix::port_mask();
+        ja1logic::fanfix::port_set(0);
         let mut s = Sound::default();
         s.speech_raw("x", RATE as i32, 70, &vec![200u8; STREAM_BUFFER + 100]);
         s.speech_stall();
@@ -1203,6 +1255,24 @@ mod stall_tests {
         s.render_add(&mut out);
         assert!(out[99] != 0, "the rest plays after the box");
         assert!(out[100] == 0 && !s.speech_busy(), "and the voice ends at its last byte");
+        // #71 P12 (#2 row 55): at level `all` the voice plays on under the box.
+        ja1logic::fanfix::port_set(1 << 11);
+        let mut s = Sound::default();
+        s.speech_raw("x", RATE as i32, 70, &vec![200u8; STREAM_BUFFER + 100]);
+        s.speech_stall();
+        let mut out = vec![0i32; STREAM_BUFFER + 500];
+        s.render_add(&mut out);
+        ja1logic::fanfix::port_set(mask);
+        assert!(out[STREAM_BUFFER + 99] != 0, "P12: no silence after the first buffer");
+        assert!(out[STREAM_BUFFER + 100] == 0 && !s.speech_busy(), "P12: the voice ends at its last byte");
+        // #71 P13 (#2 row 56): a battle sound of 40000 bytes stops at 32768 in 1.13b, plays all of it at level `all`.
+        let d = vec![1u8; 40000];
+        ja1logic::fanfix::port_set(0);
+        let off = super::battle_part(&d).len();
+        ja1logic::fanfix::port_set(1 << 12);
+        let all = super::battle_part(&d).len();
+        ja1logic::fanfix::port_set(mask);
+        assert_eq!((off, all), (2 * STREAM_BUFFER, 40000), "P13 battle sound length");
     }
 
     /// ResolveSectorBattle: one refill per stream, so no battle sound goes past two buffers.
@@ -1212,9 +1282,15 @@ mod stall_tests {
         if !std::path::Path::new(iso).exists() || !std::path::Path::new(exe).exists() {
             return;
         }
+        let _lock = crate::sound::TEST_FIX_MASK.lock().unwrap_or_else(|e| e.into_inner());
+        let mask = ja1logic::fanfix::port_mask();
+        ja1logic::fanfix::port_set(0);
         let mut s = Sound::with_files(iso, exe);
-        assert!(s.battle("DIE0.8"));
-        assert_eq!(s.speech_bytes(), 2 * STREAM_BUFFER, "DIE0.8 holds 54174 bytes");
+        let ok = s.battle("DIE0.8");
+        let n = s.speech_bytes();
+        ja1logic::fanfix::port_set(mask);
+        assert!(ok);
+        assert_eq!(n, 2 * STREAM_BUFFER, "DIE0.8 holds 54174 bytes");
     }
 }
 
@@ -1237,6 +1313,49 @@ mod tests {
         super::screen_files("b.gog", "b/JA.EXE");
         assert_eq!(super::screen(|s| s.files()), Some(("a.gog".to_string(), "a/JA.EXE".to_string())));
         super::screen(|s| *s = super::Sound::default());
+    }
+
+    /// #70 row 52 (changelog 1.15q, found by DarzaR; 1.15m SetSoundVolume 0x5CEA5 / SetMusicVolume 0x5CEC5 skip the
+    /// AIL call when the driver handle 0x337780 / 0x337790 is 0, a crash without a sound card). The port has no driver
+    /// handle: with no sound device the volume keys still change the numbers and set the masters, and nothing fails.
+    #[test]
+    fn volume_keys_work_without_a_sound_device() {
+        let old = super::volumes();
+        super::set_volumes(super::Volumes { music: 50, sound: 50 });
+        assert!(super::press_volume_key(b'.').is_some());
+        assert_eq!(super::digital_master(), 51);
+        assert!(super::press_volume_key(b',').is_some());
+        assert_eq!(super::digital_master(), 50);
+        assert!(super::press_volume_key(b'+').is_some());
+        assert!(super::press_volume_key(b'-').is_some());
+        assert_eq!((super::volumes().music, super::volumes().sound), (50, 50));
+        // #71 P09 (#2 row 41), in this test because both share the volume statics: Quick Restore's numbers reach the
+        // masters only with the fix.
+        let _lock = super::TEST_FIX_MASK.lock().unwrap_or_else(|e| e.into_inner());
+        let mask = ja1logic::fanfix::port_mask();
+        ja1logic::fanfix::port_set(0);
+        super::restore_volumes(super::Volumes { music: 40, sound: 30 });
+        assert_eq!(super::digital_master(), 50);
+        assert_ne!(crate::music::with(|m| m.master()), 40);
+        ja1logic::fanfix::port_set(1 << 8);
+        super::restore_volumes(super::Volumes { music: 40, sound: 30 });
+        assert_eq!((super::digital_master(), crate::music::with(|m| m.master())), (30, 40));
+        assert_eq!((super::volumes().music, super::volumes().sound), (40, 30));
+        // #71 P17 (#2 row 40): the numbers start at the masters' 127, so the first louder key changes nothing; in
+        // 1.13b they start at 100 / 70 and the first louder key sends 100 / 71 (quieter than 127).
+        ja1logic::fanfix::port_set(0);
+        super::set_volumes(super::Volumes { music: 100, sound: 70 });
+        super::start_volumes();
+        assert_eq!(super::press_volume_key(b'+'), Some(super::MasterSet::Music(100)));
+        assert_eq!(super::press_volume_key(b'.'), Some(super::MasterSet::Digital(71)));
+        ja1logic::fanfix::port_set(1 << 16);
+        super::set_volumes(super::Volumes { music: 100, sound: 70 });
+        super::start_volumes();
+        assert_eq!(super::press_volume_key(b'+'), Some(super::MasterSet::Music(127)));
+        assert_eq!(super::press_volume_key(b'.'), Some(super::MasterSet::Digital(127)));
+        assert_eq!(super::press_volume_key(b'-'), Some(super::MasterSet::Music(126)));
+        ja1logic::fanfix::port_set(mask);
+        super::set_volumes(old);
     }
 
     /// Ledger rows c2aea50:ja1front:21202/21206: the name cry at half the quote volume swings half as far from 128.

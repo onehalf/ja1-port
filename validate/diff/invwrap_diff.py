@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Differential test: the wrapper of the inventory screen, FUN_00054d50 0x54D50, original vs port.
 
-usage: .venv/bin/python validate/diff/invwrap_diff.py [ncases=1500] [DUMP] [--lib SO]
+usage: .venv/bin/python validate/diff/invwrap_diff.py [ncases=1500] [DUMP] [--lib SO] [--fan 66] [--pfix 11]
 A case: the merc that opens the screen, the hand items, action points and +0x16A of the 8 mercs, the bytes +0x1BB and +0x130, the view mode, panel ends. The original
 runs from its first line with real ReserveAp? and ActionApCost. The screen 0x53A9C, DrawMercBody?, LoadStripPccs, DrawStripBoxes,
 the mouse limit, MouseSetPos? are stubs (inv_diff, strips_diff, invdraw_diff test them); the redraw 0x1CB78 is a stub that sets
 the flag 0x22A02E, as TacticalRedraw and OverviewRedraw do.
 The port: ja1f_inv_after = invscreen::after_screen + wrapper_end, the code the window runs, for the same merc pair.
 Compared: all 48 soldier records, view mode, panel ends, the flag 0x22A02E, the second argument of the screen.
+Third part: screen_drawn 0x92DCC during and after the pick-up's screen (CursorItemToSoldier? 0x54EC8) vs
+play::pick_screen_drawn; with --fan 66 the original side runs the 1.15m bytes (cave 0x2B6A1, #70 row 90 / F66).
+The selected slot 0x284F11 (the merc shown last in the screen) is random: 1.13b reserves only for the opener
+(#2 row 47); with --pfix 11 both sides reserve for the shown merc too (pfix.py cave at 0x54E7B, port fix P11).
 Exits 1 on mismatch.
 """
 import ctypes, os, random, sys
@@ -19,9 +23,12 @@ import port_lib                      # noqa: E402
 from emu import Emu                  # noqa: E402
 
 argv = sys.argv[1:]
+import pfix                          # noqa: E402  #71 --pfix 11: the shown merc's reserve too
+PFIX = pfix.parse(argv)
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
-args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
+args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
+FAN = "--fan" in argv               # --fan 66: fan fix F66 (#70 row 90) vs the 1.15m CursorItemToSoldier? + cave 0x2B6A1
 ncases = int(args[0]) if args else 1500
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
 if not os.path.exists(dump):
@@ -35,6 +42,15 @@ P.ja1f_cursor_after.argtypes = [ctypes.c_uint8, ctypes.c_uint8, i32, i32, i32]
 P.ja1f_cursor_after.restype = ctypes.c_int64
 SOL, REC, MODE, ENDS, FLAG, STRIPM = 0xFA958, 0x200, 0x92DDF, 0x92E35, 0x22A02E, 0x92E4F
 e = Emu(dump=dump, fast=True)
+P.ja1_port_fixes_set.argtypes = [ctypes.c_uint64]
+P.ja1_port_fixes_set(0)
+if PFIX is not None:
+
+    class _FrontFixes:                    # the port side is libja1front: its own copy of the fix masks
+        @staticmethod
+        def port_fixes(m):
+            P.ja1_port_fixes_set(m)
+    pfix.apply(e, PFIX, _FrontFixes)
 rt = e.rt
 log = []
 
@@ -93,6 +109,8 @@ for case in range(ncases):
     e.uc.mem_write(rt(0x222B50), bytes([r.randrange(2)]))
     stripm = r.randrange(2)
     e.uc.mem_write(rt(STRIPM), bytes([stripm]))
+    shown = r.choice((opener, opener, r.randrange(8), 9))     # the selected slot at the end of the screen
+    e.uc.mem_write(rt(0x284F11), bytes([shown]))
     # The world of the port, from the same state before the call.
     bufs, sc = port_lib.world_load(e, ai)
     tail.clear()
@@ -160,6 +178,40 @@ for case in range(cases2):
         bad2 += 1
         if bad2 <= 5:
             print(f"cursor case {case}: before {before} after {after_screen[0]} drop {drop}: orig {calls} flag {o_flag}, port {p_calls} {v:#x}")
-print(f"invwrap_diff: {ncases} cases, {bad} mismatches; cursor: {cases2} cases, {bad2} mismatches")
-bad += bad2
+
+# screen_drawn 0x92DCC while the pick-up's screen runs and after it (#70 row 90, F66): 1.13b leaves the byte as it is
+# (0 in the enemies' turn: no pointer); 1.15m 0x54EE9 calls cave 0x2B6A1 = byte 1 around InvScreenRun? 0x54D50, then
+# the old value back. Port: play::pick_screen_drawn (the window puts the old value back after the screen).
+DRAWN = 0x92DCC
+P.ja1_fan_fixes_set.argtypes = P.ja1_fan_fixes_set_hi.argtypes = [ctypes.c_uint64]
+P.ja1f_pick_screen_drawn.argtypes = [ctypes.c_uint8, i32]
+P.ja1f_pick_screen_drawn.restype = i32
+P.ja1_fan_fixes_set(0)
+P.ja1_fan_fixes_set_hi(1 << 1 if FAN else 0)    # F66 = bit 1 of the high half
+e3 = Emu(dump=dump, fast=True)
+if FAN:
+    e3.put_115m(only=[(0x54EC8, 0x54F40), (0x2B6A1, 0x2B6C6)])
+seen3 = []
+e3.stub(e3.rt(0x674B0), lambda em, *_: 0)
+e3.stub(e3.rt(0x54D50), lambda em, *_: seen3.append(em.r8(em.rt(DRAWN))) or 0)
+e3.stub(e3.rt(0x682AC), lambda em, *_: 0)
+e3.stub(e3.rt(0x681D0), lambda em, *_: 0)
+r3 = random.Random(66)
+cases3 = max(200, ncases // 5)
+bad3 = 0
+for case in range(cases3):
+    before, drawn = r3.choice([0, 7, 0x4D]), r3.choice([0, 0, 1, 2, 0xFF])
+    e3.w8(e3.rt(CURSOR), before)
+    e3.w8(e3.rt(DRAWN), drawn)
+    seen3.clear()
+    e3.call(e3.rt(0x54EC8), e3.rt(SOL))
+    o = (list(seen3), e3.r8(e3.rt(DRAWN)))
+    p_ = ([P.ja1f_pick_screen_drawn(drawn, 1)] if before else [], drawn)
+    if o != p_:
+        bad3 += 1
+        if bad3 <= 5:
+            print(f"drawn case {case}: cursor {before} drawn {drawn}: orig (in screen, after) {o}, port {p_}")
+print(f"invwrap_diff: {ncases} cases, {bad} mismatches; cursor: {cases2} cases, {bad2} mismatches; "
+      f"drawn{' --fan 66' if FAN else ''}: {cases3} cases, {bad3} mismatches")
+bad += bad2 + bad3
 sys.exit(1 if bad else 0)

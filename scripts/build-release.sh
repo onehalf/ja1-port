@@ -1,5 +1,5 @@
 #!/bin/sh
-# Release archives of ja1front with SDL2 linked in (no SDL2 needed on the player's machine).
+# Release archives of the port (program ja1-port, crate ja1front) with SDL2 linked in (no SDL2 needed on the player's machine).
 #   scripts/build-release.sh linux     -> dist/ja1-port-VERSION-linux-x86_64.tar.gz
 #   scripts/build-release.sh windows   -> dist/ja1-port-VERSION-windows-x86_64.zip   (cross build from Linux)
 # linux: needs cmake, a C compiler and the X11/Wayland/ALSA/PulseAudio headers (SDL2 is built from source;
@@ -29,10 +29,10 @@ case $WHAT in
 linux)
   (cd port/ja1front && CARGO_TARGET_DIR="$ROOT/build/target-linux" $CARGO build --release --locked \
      --features sdl2/bundled,sdl2/static-link)
-  B=build/target-linux/release/ja1front
+  B=build/target-linux/release/ja1-port
   N=ja1-port-$VERSION-linux-x86_64
   stage "build/$N" "$B"
-  cp scripts/install-from-gog.sh "build/$N/"
+  cp scripts/install-from-gog.sh scripts/setup.sh "build/$N/"
   tar -C build -czf "dist/$N.tar.gz" "$N"
   echo "dist/$N.tar.gz"
   ;;
@@ -48,9 +48,10 @@ windows)
   (cd port/ja1front && CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=$CC \
      RUSTFLAGS="-L $ROOT/$S/x86_64-w64-mingw32/lib -l advapi32" CARGO_TARGET_DIR="$ROOT/build/target-windows" \
      $CARGO build --release --locked --target x86_64-pc-windows-gnu --features sdl2/static-link)
-  B=build/target-windows/x86_64-pc-windows-gnu/release/ja1front.exe
+  B=build/target-windows/x86_64-pc-windows-gnu/release/ja1-port.exe
   N=ja1-port-$VERSION-windows-x86_64
   stage "build/$N" "$B"
+  cp scripts/setup.bat "build/$N/"
   rm -f "dist/$N.zip"
   if command -v zip >/dev/null; then (cd build && zip -qr "../dist/$N.zip" "$N")
   else (cd build && python3 -m zipfile -c "../dist/$N.zip" "$N"); fi

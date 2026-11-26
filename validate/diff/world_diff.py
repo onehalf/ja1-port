@@ -180,7 +180,7 @@ def part_load():
     print(f"load: {len(TABLES)} tables, {len(SAVE_AT)} save fields, {len(BUFS) + len(SCALARS) - len(TABLES) - len(SAVE_AT)} start values")
     if PORT:
         out = os.path.join(ROOT, "build", "world_port.bin")
-        exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1front")
+        exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1-port")
         r = subprocess.run([exe, os.path.join(ROOT, "rom", "JA1.gog"), EXE, "--world", SAVE, out],
                            capture_output=True, text=True)
         if r.returncode:
@@ -357,7 +357,7 @@ def part_enter():
     e = Emu(dump=DUMP["pre"], fast=True)
     seed = e.r32(e.rt(SEED))
     out = os.path.join(ROOT, "build", "enter_port.bin")
-    exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1front")
+    exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1-port")
     r = subprocess.run([exe, os.path.join(ROOT, "rom", "JA1.gog"), EXE, "--enter", DAY_SAVE, str(seed), out],
                        capture_output=True, text=True)
     if r.returncode:
@@ -400,7 +400,7 @@ def part_leave():
     save, script, out = (os.path.join(ROOT, "build", f) for f in ("leave_port.SAV", "leave_port.txt", "leave_port.bin"))
     open(save, "wb").write(d)
     open(script, "w").write("wait 1\n")
-    exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1front")
+    exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1-port")
     r = subprocess.run([exe, os.path.join(ROOT, "rom", "JA1.gog"), EXE, "--script", save, "1", script, out],
                        capture_output=True, text=True)
     if r.returncode:
@@ -425,7 +425,7 @@ def part_leave():
 def part_inventory():
     """inventory (--port only): key I + inv lines of a play script (world_load.md section 8, inventory.md)."""
     save = os.path.join(ROOT, "build", "DAY_fight48d.SAV")
-    exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1front")
+    exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1-port")
     hand, ground = "inv 64 112 1\ninv 64 112 0\n", "inv 120 155 1\ninv 120 155 0\n"
     scripts = {"open": "", "back": hand + hand, "drop": hand + ground, "again": hand + ground + ground + hand}
     img = {}
@@ -469,7 +469,7 @@ def part_eod():
     open(script, "w").write("eod 40\nwait 1\n")
     if os.path.exists(png):
         os.remove(png)
-    exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1front")
+    exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1-port")
     r = subprocess.run([exe, os.path.join(ROOT, "rom", "JA1.gog"), EXE, "--script", save, "1", script, out],
                        capture_output=True, text=True, env=dict(os.environ, JA1_EOD_PNG=png))
     if r.returncode:
@@ -496,7 +496,7 @@ def part_dayloop():
     save = os.path.join(ROOT, "build", "eod_port.SAV")
     script, out = (os.path.join(ROOT, "build", f) for f in ("dayloop_port.txt", "dayloop_port.bin"))
     open(script, "w").write("eod 0\nwait 1\nday\nmap 59 0 1\nstart 1\neod 0\nwait 5\nday\nmap 59 0 1\nstart 1\nwait 3\n")
-    exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1front")
+    exe = os.path.join(ROOT, "port", "ja1front", "target", "release", "ja1-port")
     r = subprocess.run([exe, os.path.join(ROOT, "rom", "JA1.gog"), EXE, "--script", save, "1", script, out],
                        capture_output=True, text=True, timeout=600)
     if r.returncode:

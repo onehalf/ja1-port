@@ -1,11 +1,12 @@
 //! `ja1front --setup` (port option, not in the original): the play settings of config.rs on the office switch box.
-//! Each option is a switch row: a lever for on / off, the lamp lit and the value in the name for the other options
+//! Each option is a switch row: the handle place shows the value (far left = the first, far right = the last), the
+//! lamp is lit when the handle is not at far left, and the name holds the value for options with more than 2 values
 //! (a click gives the next value, a right click the one before). The big lever starts the game; Esc quits. Every
 //! change goes to ja1.cfg at once (the window does the file).
 
 use std::sync::Arc;
 
-use crate::config::{self, OPTS};
+use crate::config::OPTS;
 use crate::data::Common;
 use crate::office::{OfficeData, Pic};
 use crate::panel::{self, Painter, PanelData};
@@ -13,23 +14,26 @@ use crate::switchbox::{self, Step};
 
 const PW: usize = 320;
 const N: usize = OPTS.len();
-/// The switch slot of each option (switchbox::place): mouse and window left, sound and game right.
-const SLOT: [usize; N] = [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15];
+/// The switch slot of each option (switchbox::place): mouse and window left, sound and game right. Insert #13556 item
+/// 3: Subtitles (option 8) in the left column (slot 6), A.I.M. grid (option 12) in the last right row (slot 16). Slot
+/// 14 (the old Go switch, 2026-11-25: test saves out of the release) stays empty: films above, game rules below.
+const SLOT: [usize; N] = [0, 1, 2, 3, 4, 5, 10, 11, 6, 12, 13, 15, 16];
 /// The row width that a click hits (lever + name).
 const ROW_W: i32 = 104;
 /// The widest row label that fits its field (text at slot x + 30, the field ends 75 pixels on, 2 pixels room).
 pub const LABEL_MAX: i32 = 73;
 /// The big lever: its place and its 9 frames (22 x 130 at PANBRUSH (200 + 22 f, 0)), as switchbox.rs.
 const LEVER: (i32, i32) = (244, 31);
-/// The help panel over the empty switch rows 6..9 and 16..19 (x, y, w, h), its fill and frame colours (room
-/// palette: a dark blue grey and the slot colour).
-const HELP: (i32, i32, i32, i32) = (28, 116, 211, 57);
+/// The help panel over the empty switch rows 7..9 and 17..19 (x, y, w, h; row 16 = A.I.M. grid), its fill and frame
+/// colours (room palette: a dark blue grey and the slot colour). It ends where CLOSE starts.
+const HELP: (i32, i32, i32, i32) = (28, 131, 211, 41);
 const HELP_FILL: u8 = 6;
 const HELP_EDGE: u8 = 27;
 /// The text colours: a lit row (warm, as the copper of the levers), on, off.
 const LIT: u8 = 186;
 const ON: u8 = 0x28;
-const OFF: u8 = 0x44;
+/// Insert #13556 item 1: off = 0x7A (room palette (170, 170, 202)), readable and less bright than on.
+const OFF: u8 = 0x7A;
 /// The engraved CLOSE under the lever area: covered and replaced by the lever's meaning.
 const CLOSE: (i32, i32, i32, i32) = (171, 172, 62, 11);
 
@@ -51,30 +55,22 @@ pub struct Setup {
     pub v: [usize; N],
     /// The option under the mouse or chosen by the keys.
     pub hover: Option<usize>,
-    /// Start values whose save file is missing (skipped by a click).
-    pub missing: [bool; 8],
     /// A line that replaces the help (a file error).
     pub note: Option<String>,
     pub buf: Vec<u8>,
     pub pal: [u8; 768],
+    /// A slide frame: option i draws its handle at this x (switch_pic) instead of its value's place.
+    slide: Option<(usize, i32)>,
 }
 
 impl Setup {
-    /// The box with the values `v`; `has_save(name)` tells if saves/NAME exists (start values).
-    pub fn new(iso: &str, exe: &str, v: [usize; N], has_save: impl Fn(&str) -> bool) -> Result<Setup, i32> {
+    /// The box with the values `v`.
+    pub fn new(iso: &str, exe: &str, v: [usize; N]) -> Result<Setup, i32> {
         crate::sound::screen_main(iso, exe);
         let data = OfficeData::load(exe)?;
         let (c, pd) = (crate::common(iso)?, panel::panel_data(iso, exe)?);
-        let mut missing = [false; 8];
-        for (j, s) in OPTS[config::START].values.iter().enumerate() {
-            missing[j] = !s.1.is_empty() && !has_save(s.1);
-        }
-        let mut v = v;
-        if missing[v[config::START]] {
-            v[config::START] = 0;
-        }
         let pal = data.room_palette();
-        let mut s = Setup { pd, c, data, v, hover: None, missing, note: None, buf: vec![0; PW * 200], pal };
+        let mut s = Setup { pd, c, data, v, hover: None, note: None, buf: vec![0; PW * 200], pal, slide: None };
         s.draw();
         Ok(s)
     }
@@ -128,12 +124,21 @@ impl Setup {
         for i in 0..N {
             let (x, y) = switchbox::place(SLOT[i]);
             let o = &OPTS[i];
-            let on = if o.lever() { self.v[i] == 1 } else { true };
-            part(p.buf, &self.data.panbrush, if on { 0 } else { 26 }, 74, 26, 7, x, y);
-            part(p.buf, &self.data.panbrush, if on { 58 } else { 52 }, 74, 6, 4, x + 10, y + 7);
+            // Insert #13556 item 2: Speed (option 1) works only with Grab mouse (option 0) on, so it is dim while that is
+            // off (a click or a key still changes it).
+            let on = if o.lever() { self.v[i] == 1 } else if i == 1 { self.v[0] == 1 } else { true };
+            let hx = match self.slide {
+                Some((j, h)) if j == i => h,
+                _ => handle_x(self.v[i], o.values.len()),
+            };
+            switch_pic(p.buf, &self.data.panbrush, hx, x, y);
             let lit = self.hover == Some(i);
             let fg = if lit { LIT } else if on { ON } else { OFF };
             p.text(labels[i].as_bytes(), x + 30, y + 2, false, fg, 3, 1);
+        }
+        // An empty switch slot (slot 14, the old Go switch) shows the plate beside it, not a black hole.
+        for slot in (0..7).chain(10..17).filter(|s| !SLOT.contains(s)) {
+            blank_slot(p.buf, slot);
         }
         let help: String = match (&self.note, self.hover) {
             (Some(n), _) => n.clone(),
@@ -143,14 +148,16 @@ impl Setup {
         let (hx, hy, hw, hh) = HELP;
         fill(p.buf, hx, hy, hw, hh, HELP_EDGE);
         fill(p.buf, hx + 1, hy + 1, hw - 2, hh - 2, HELP_FILL);
-        if let Some(i) = self.hover {
-            p.text(labels[i].as_bytes(), hx + 6, hy + 5, false, LIT, 3, 1);
-        }
         let lines: Vec<String> = help.split('\n').flat_map(|l| wrap(l, 34)).collect();
+        // The row label heads the help when the help has 3 lines or fewer (4 lines fill the panel: Size).
+        let head = self.hover.is_some() && lines.len() <= 3;
+        if let (true, Some(i)) = (head, self.hover) {
+            p.text(labels[i].as_bytes(), hx + 6, hy + 4, false, LIT, 3, 1);
+        }
         for (k, line) in lines.iter().enumerate().take(4) {
             // A help with one line per value (Size) lights the line of the chosen value.
             let chosen = self.note.is_none() && self.hover.is_some_and(|i| help.contains('\n') && self.v[i] == k);
-            p.text(line.as_bytes(), hx + 6, hy + 5 + 11 * (self.hover.is_some() as i32) + 10 * k as i32, false,
+            p.text(line.as_bytes(), hx + 6, hy + 4 + 9 * (head as i32 + k as i32), false,
                    if chosen { LIT } else { ON }, 3, 1);
         }
         let (cx, cy, cw, ch) = CLOSE;
@@ -158,17 +165,10 @@ impl Setup {
         p.text(b"PULL = PLAY", cx + cw / 2, cy + 2, true, OFF, 3, 1);
     }
 
-    /// The next (`step` = 1) or previous (-1) value of option i; start values with no save are skipped.
+    /// The next (`step` = 1) or previous (-1) value of option i.
     fn cycle(&mut self, i: usize, step: i32) {
         let n = OPTS[i].values.len() as i32;
-        let mut j = self.v[i] as i32;
-        for _ in 0..n {
-            j = (j + step).rem_euclid(n);
-            if i != config::START || !self.missing[j as usize] {
-                break;
-            }
-        }
-        self.v[i] = j as usize;
+        self.v[i] = (self.v[i] as i32 + step).rem_euclid(n) as usize;
     }
 
     /// A mouse move to (x, y): true when the picture changed.
@@ -194,12 +194,20 @@ impl Setup {
         Act::None
     }
 
+    /// Insert #13504: after the switch sound the handle slides from the old to the new value's place in 3 frames
+    /// (a wrap slides the full width); the last frame is the picture at rest.
     fn change(&mut self, i: usize, step: i32, steps: &mut Vec<Step>) -> Act {
         steps.push(Step::Sfx(switchbox::FX_SWITCH, 0x2B11, 20, true));
+        let n = OPTS[i].values.len();
+        let from = handle_x(self.v[i], n);
         self.cycle(i, step);
+        let to = handle_x(self.v[i], n);
         self.note = None;
-        self.draw();
-        steps.push(Step::Show(self.buf.clone(), 0));
+        for f in 1..=SLIDE_FRAMES {
+            self.slide = if f < SLIDE_FRAMES { Some((i, from + (to - from) * f / SLIDE_FRAMES)) } else { None };
+            self.draw();
+            steps.push(Step::Show(self.buf.clone(), SLIDE_MS));
+        }
         Act::Changed
     }
 
@@ -217,7 +225,7 @@ impl Setup {
 
     /// A key (SDL key name): Up / Down choose a row, Space / Right / Left change it, Enter or P plays, Esc quits.
     pub fn key(&mut self, name: &str, steps: &mut Vec<Step>) -> Act {
-        let order: Vec<usize> = (0..N).collect();
+        let order = screen_order();
         let pos = self.hover.and_then(|h| order.iter().position(|&i| i == h));
         match name {
             "Up" | "Down" => {
@@ -243,16 +251,48 @@ impl Setup {
         }
     }
 
-    /// The command line words after ISO EXE for the chosen start (paths relative to the working folder).
+    /// The command line words after ISO EXE: the lever starts the main menu (saves/ holds the games).
     pub fn start_args(&self) -> Vec<String> {
-        let f = OPTS[config::START].values[self.v[config::START]].1;
-        // A missing save (a test save, or no day saved yet) starts the main menu.
-        if f.is_empty() || !std::path::Path::new("saves").join(f).is_file() {
-            vec!["--menu".into(), "saves".into()]
-        } else {
-            vec!["--play".into(), std::path::Path::new("saves").join(f).to_string_lossy().into_owned()]
-        }
+        vec!["--menu".into(), "saves".into()]
     }
+}
+
+/// Cover the switch cell of `slot` (22 x 13 from 1 pixel left of and above its place, frame included) with the plate
+/// right of it (the empty label field of the same row).
+fn blank_slot(buf: &mut [u8], slot: usize) {
+    let (x, y) = switchbox::place(slot);
+    for r in y - 1..y + 12 {
+        let o = r as usize * PW;
+        buf.copy_within(o + (x + 23) as usize..o + (x + 45) as usize, o + (x + 1) as usize);
+    }
+}
+
+/// The slide of a switch handle: frames and the time each frame shows.
+const SLIDE_FRAMES: i32 = 3;
+const SLIDE_MS: u32 = 30;
+/// The handle x in the switch (0 = far left, HANDLE_MAX = far right) of value v of n, at equal steps.
+const HANDLE_MAX: i32 = 17;
+
+pub fn handle_x(v: usize, n: usize) -> i32 {
+    if n < 2 {
+        return HANDLE_MAX;
+    }
+    let (v, d) = (v as i32, n as i32 - 1);
+    (2 * HANDLE_MAX * v + d) / (2 * d)
+}
+
+/// A switch (26 x 7, PANBRUSH row 74) with its handle at `hx` and its lamp (lit = handle not at far left). At the
+/// two ends: the OFF (26, 74) and ON (0, 74) pictures. Between: the empty slot (ON cols 0-16 = frame + track, OFF
+/// cols 17-25 = track + frame) and the ON handle (cols 17-25) at hx.
+fn switch_pic(buf: &mut [u8], pb: &Pic, hx: i32, x: i32, y: i32) {
+    if hx <= 0 {
+        part(buf, pb, 26, 74, 26, 7, x, y);
+    } else {
+        part(buf, pb, 0, 74, 17, 7, x, y);
+        part(buf, pb, 26 + 17, 74, 9, 7, x + 17, y);
+        part(buf, pb, 17, 74, 9, 7, x + hx, y);
+    }
+    part(buf, pb, if hx > 0 { 58 } else { 52 }, 74, 6, 4, x + 10, y + 7);
 }
 
 /// Copy the w x h area at (sx, sy) of `pic` to (x, y) of the 320 x 200 picture `buf`.
@@ -293,6 +333,14 @@ fn wrap(s: &str, n: usize) -> Vec<String> {
     out
 }
 
+/// Insert #13556 item 4: the options in screen order (Up / Down keys): the left column top to bottom, then the right
+/// one (slot order).
+pub fn screen_order() -> Vec<usize> {
+    let mut o: Vec<usize> = (0..N).collect();
+    o.sort_by_key(|&i| SLOT[i]);
+    o
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,11 +365,63 @@ mod tests {
         }
         let _g = crate::sound::SCREEN_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let v = OPTS.each_ref().map(|o| o.default);
-        let mut s = Setup::new(iso.to_str().unwrap(), exe.to_str().unwrap(), v, |_| true).unwrap();
+        let mut s = Setup::new(iso.to_str().unwrap(), exe.to_str().unwrap(), v).unwrap();
         for line in s.label_widths() {
             let w: i32 = line.split(' ').next().unwrap().parse().unwrap();
             assert!(w <= LABEL_MAX, "label too wide for its field: {}", line);
         }
+    }
+
+    /// Insert #13504: the handle of every value of every option is inside the slot, rises with the value, and sits at
+    /// the OFF / ON picture places at the two ends.
+    #[test]
+    fn handle_place_rises_with_the_value() {
+        for o in OPTS.iter() {
+            let n = o.values.len();
+            let xs: Vec<i32> = (0..n).map(|v| handle_x(v, n)).collect();
+            assert_eq!((xs[0], xs[n - 1]), (0, HANDLE_MAX), "{}", o.label);
+            assert!(xs.windows(2).all(|w| w[0] < w[1]), "{}: {:?}", o.label, xs);
+            assert!(xs.iter().all(|&x| (0..=HANDLE_MAX).contains(&x) && x + 9 <= 26), "{}: {:?}", o.label, xs);
+        }
+    }
+
+    /// A switch at rest gives the old pictures at the two ends (the OFF / ON art and the lamp); a middle place keeps
+    /// the frame and differs from both.
+    #[test]
+    fn switch_ends_are_the_old_pictures() {
+        let (w, h) = (64usize, 81usize);
+        let px: Vec<u8> = (0..w * h).map(|k| (k * 7 % 251) as u8).collect();
+        let pb: Pic = (w, h, px);
+        let old = |on: bool| {
+            let mut b = vec![0u8; PW * 200];
+            part(&mut b, &pb, if on { 0 } else { 26 }, 74, 26, 7, 28, 26);
+            part(&mut b, &pb, if on { 58 } else { 52 }, 74, 6, 4, 38, 33);
+            b
+        };
+        let new = |hx: i32| {
+            let mut b = vec![0u8; PW * 200];
+            switch_pic(&mut b, &pb, hx, 28, 26);
+            b
+        };
+        assert!(new(0) == old(false), "far left is not the OFF picture");
+        assert!(new(HANDLE_MAX) == old(true), "far right is not the ON picture");
+        let mid = new(handle_x(1, 3));
+        assert!(mid != old(true) && mid != old(false));
+        assert_eq!(mid[26 * PW + 28], pb.2[74 * w], "the left frame of the slot");
+    }
+
+    /// Insert #13556 items 3 + 4: Subtitles sits under Scanlines in the left column, A.I.M. grid last on the right,
+    /// and Up / Down walk the rows as the screen shows them.
+    #[test]
+    fn keys_follow_the_screen_order() {
+        assert_eq!(screen_order(), [0, 1, 2, 3, 4, 5, 8, 6, 7, 9, 10, 11, 12]);
+        let o = screen_order();
+        for w in o.windows(2) {
+            let (a, b) = (switchbox::place(SLOT[w[0]]), switchbox::place(SLOT[w[1]]));
+            assert!(a.0 < b.0 || (a.0 == b.0 && a.1 < b.1), "{:?} before {:?}", a, b);
+        }
+        assert_eq!((OPTS[8].key, SLOT[8]), ("subtitles", 6));
+        assert_eq!((OPTS[12].key, SLOT[12]), ("aim_browser", 16));
     }
 
     #[test]

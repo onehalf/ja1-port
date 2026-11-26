@@ -1,4 +1,4 @@
-# JA1 port play settings. The setup screen (ja1front with no arguments, or --setup) writes ja1.cfg beside the
+# JA1 port play settings. The setup screen (setup.sh / setup.bat, or ja1-port --setup) writes ja1.cfg beside the
 # program; you can edit it by hand. An environment variable of the same option wins over the file.
 # The values below are the defaults.
 
@@ -35,6 +35,9 @@ title_films = on
 # The island film at a new game only. (off | on)
 intro = on
 
-# What the lever starts: the main menu, or the last day (saves/DAY.SAV). The other values need test saves that
-# are not included; a missing save starts the main menu. (menu | continue | fight | full-day | grenade | no-money)
-start = menu
+# Off: the game as Sir-tech made it (1.13b, its bugs too). 1.15m: the bug fixes of the unofficial 1.15m fan
+# patch by DarzaR, written as port code. All: 1.15m + the port's own fixes. (off | 1.15m | all)
+fixes = off
+
+# A.I.M. shows all mercs on one page, with sort and filter (a mod, not in the original). (off | on)
+aim_browser = off

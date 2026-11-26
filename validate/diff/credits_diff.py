@@ -29,7 +29,7 @@ argv = sys.argv[1:]
 PNG = argv[argv.index("--png") + 1] if "--png" in argv else None
 args = [a for a in argv if not a.startswith("--") and a != PNG]
 dump = args[0] if args else os.path.join(ROOT, "build", "mem_tac60.bin")
-FRONT = os.path.join(ROOT, "port/ja1front/target/release/ja1front")
+FRONT = os.path.join(ROOT, "port/ja1front/target/release/ja1-port")
 ISO, EXE = os.path.join(ROOT, "rom/JA1.gog"), os.path.join(ROOT, "build/game113b/JA.EXE")
 TITLE = cd_read("DAT/TITLE.DAT")
 

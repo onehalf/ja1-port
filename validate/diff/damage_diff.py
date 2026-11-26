@@ -8,6 +8,8 @@ Random 0x53538 is stubbed on both sides with the same scripted results (the argu
 too). Shooters/targets are dumped soldiers with fuzzed weapon, flight distance, margin, armour (helmet / vest /
 Kevlar types and conditions), stats, posture, plus fuzzed hit height and damage. Compared: return value, every
 call to Random, the whole target record afterwards (stat losses, armour wear) and the knockdown flag 0x92E72.
+--fan (with --port): #70 F43 (row 93) - the 1.15m HitLocationDamage sites 0x38DF9 / 0x38FA9 / 0x39031 (tails: armour
+works only at condition >= 9) over 1.13b, port with F43 on. PLANT_F43=1 runs the port with F43 off (the proof).
 """
 import glob, os, random, struct, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -23,11 +25,19 @@ if PORT:
     sys.argv.remove("--port")
     import ai                        # noqa: E402
     import port_lib                  # noqa: E402
+FAN = "--fan" in sys.argv           # #70 F43 (row 93): 1.15m HitLocationDamage sites (helmet / item 0x31 / body armour
+if FAN:                             # work only at condition >= 9) vs the port with F43 on; needs --port
+    sys.argv.remove("--fan")
+    assert PORT, "--fan needs --port"
+    F43_SITES = [(0x38DF9, 0x38DFE), (0x38FA9, 0x38FAE), (0x39031, 0x39037)]
 args = [a for a in sys.argv[1:] if not a.isdigit()]
 n = int(([a for a in sys.argv[1:] if a.isdigit()] or ["4000"])[0])
 dumps = args or sorted(glob.glob(os.path.join(HERE, "..", "..", "build", "mem_fight2*.bin")))
 rng = random.Random(2)
 e = Emu()
+if FAN:
+    e.put_115m(only=F43_SITES)
+    port_lib.fan_fixes(0 if "PLANT_F43" in os.environ else 1 << 42)
 buf = e.alloc(0x200)
 read = lambda a, k: bytes(e.uc.mem_read(a, k))
 script, calls = [], []
@@ -145,6 +155,6 @@ for i in range(n):
         check("HitLocation", (got, calls[:], got_s, got_kd, got_m), (want, seen, bytes(t), mem[combat.G_KNOCKDOWN], want_m),
               f"height {height} dmg {dmg} helmet {s[0x18]}/{s[0x1A]} e5 {s[0x3C]}/{s[0x3E]} e6 {s[0x48]}/{s[0x4A]} "
               f"anim {struct.unpack_from('<H', s, 0x1E8 + 2 * s[0x1F3])[0]:#x}")
-print(f"damage_diff{' --port' if PORT else ''}: {cases['BulletDamage']} BulletDamage + {cases['HitLocation']} HitLocationDamage cases from "
+print(f"damage_diff{' --port' if PORT else ''}{' --fan' if FAN else ''}: {cases['BulletDamage']} BulletDamage + {cases['HitLocation']} HitLocationDamage cases from "
       f"{len(real)} dumped soldiers, {fails} mismatches")
 sys.exit(1 if fails else 0)

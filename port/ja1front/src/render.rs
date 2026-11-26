@@ -386,7 +386,9 @@ impl<'a> Scene<'a> {
         if let (Some(sc), Some(env)) = (&self.cursor, cenv.as_mut()) {
             let mut st = sc.st.borrow_mut();
             let occ = self.occupant_at(st.tile);
-            cursor::target_mark(&mut buf.0, &self.ts.sprites, env, &mut st, occ);
+            let slot = (occ & 0x7F) as usize;
+            let cc = self.soldiers.as_ref().and_then(|sd| sd.records.borrow().get(slot * REC + 0x9C).copied());
+            cursor::target_mark(&mut buf.0, &self.ts.sprites, env, &mut st, occ, if slot < 48 { cc.unwrap_or(0) } else { 0 });
         }
 
         // 3. Soldiers and objects, rows -1..rows, columns -1..cols, only tiles on the map.

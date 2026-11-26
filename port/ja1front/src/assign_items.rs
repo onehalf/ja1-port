@@ -442,7 +442,7 @@ pub fn window_press(pp: Painter, sp: Painter, inv: &InvData, faces: &[u8], w: &m
         pp, sp, inv, soldiers: w.soldiers.as_mut_ptr(), faces, store, world: &mut jw,
         events: VecDeque::from(vec![(x, y, 0); 1 + right as usize]), log: Vec::new(), loader: 0, quote: None, answer,
         show_info: true, info_under: None, info_mouse: false, info_shot: None,
-        opt_info: crate::ctlpanel::get(w, 6) != 0, opt_sub: crate::ctlpanel::get(w, 5) != 0, extra: None,
+        opt_info: crate::ctlpanel::get(w, 6) != 0, opt_sub: crate::ctlpanel::subtitles(w), extra: None,
     };
     let jh = ja1_host(&mut h);
     // SAFETY: jw points into `w`, which stays in place for the call; h outlives the call.

@@ -101,6 +101,38 @@ fn target(v: &View, x: i32, y: i32) -> (i32, i32) {
     (nx, ny)
 }
 
+/// SlideViewToTile? 0x3F578 on tile `t`: with the view mode on (opt_onscreen != 0) and the tile's pixel point on or
+/// past a view edge, the view goes to the target in 16 / 14 pixel steps (at most 51). Result: the steps (0: no slide)
+/// and the target.
+fn slide(v: &mut View, t: i32) -> (u32, (i32, i32)) {
+    let mut steps = 0;
+    let mut goal = (0, 0);
+    let (x, y) = ((t % 56) * 16, (t / 56) * 14);
+    let (vx, vy, r, b) = (v.view_x, v.view_y, v.view_x.wrapping_add(v.view_w), v.view_y.wrapping_add(v.view_h));
+    if v.opt_onscreen as u8 != 0 && (x <= vx || x >= r || y <= vy || y >= b) {
+        let (nx, ny) = target(v, x, y);
+        goal = (nx, ny);
+        // The library moves the view at once; the window shows the steps after the pass (Slide).
+        for _ in 0..51 {
+            if (v.view_x, v.view_y) == (nx, ny) {
+                break;
+            }
+            steps += 1;
+            if nx > v.view_x {
+                v.view_x += 16;
+            } else if nx < v.view_x {
+                v.view_x -= 16;
+            }
+            if ny > v.view_y {
+                v.view_y += 14;
+            } else if ny < v.view_y {
+                v.view_y -= 14;
+            }
+        }
+    }
+    (steps, goal)
+}
+
 /// Steps 1..4 on record `rec` (512 bytes) of soldier `slot`. Result: the number of slide steps (0: no slide) and
 /// the slide's target.
 pub fn focus(v: &mut View, rec: &[u8], slot: u8, flag: i32) -> (u32, (i32, i32)) {
@@ -118,27 +150,7 @@ pub fn focus(v: &mut View, rec: &[u8], slot: u8, flag: i32) -> (u32, (i32, i32))
     let on = v.opt_onscreen as u8;
     let (vx, vy, r, b) = (v.view_x, v.view_y, v.view_x.wrapping_add(v.view_w), v.view_y.wrapping_add(v.view_h));
     if slot == fs && on != 0 {
-        if x <= vx || x >= r || y <= vy || y >= b {
-            let (nx, ny) = target(v, x, y);
-            goal = (nx, ny);
-            // The library moves the view at once; the window shows the steps after the pass (Slide).
-            for _ in 0..51 {
-                if (v.view_x, v.view_y) == (nx, ny) {
-                    break;
-                }
-                steps += 1;
-                if nx > v.view_x {
-                    v.view_x += 16;
-                } else if nx < v.view_x {
-                    v.view_x -= 16;
-                }
-                if ny > v.view_y {
-                    v.view_y += 14;
-                } else if ny < v.view_y {
-                    v.view_y -= 14;
-                }
-            }
-        }
+        (steps, goal) = slide(v, t);
     } else if on != 0 && (x < vx || x >= r || y < vy || y >= b) {
         (v.view_x, v.view_y) = target(v, x, y);
     }
@@ -185,6 +197,26 @@ pub unsafe fn focus_world(w: *mut Ja1World, slot: i32, flag: i32) {
     w.focus_slot = v.focus_slot as u8;
     w.shown_slot = v.shown_slot;
     w.show_timer = v.show_timer;
+}
+
+/// Host op 357 slide_view (tile; only fan fix F15, EnemiesTurn? step 6): SlideViewToTile? 0x3F578 on the library world.
+///
+/// # Safety
+/// `w` is a valid world.
+pub unsafe fn slide_world(w: *mut Ja1World, tile: i32) {
+    if w.is_null() {
+        return;
+    }
+    let w = &mut *w;
+    let mut v = View { view_x: w.view_x, view_y: w.view_y, view_w: w.view_w, view_h: w.view_h, opt_onscreen: w.opt_onscreen as i32, ..View::default() };
+    let from = (w.view_x, w.view_y);
+    let (steps, target) = slide(&mut v, tile);
+    if steps > 0 {
+        crate::pointer::mouse_save(crate::pointer::game_place());
+        push_slide(Slide { from, target, steps });
+    }
+    w.view_x = v.view_x;
+    w.view_y = v.view_y;
 }
 
 /// Test entry for validate/diff/focus_diff.py: `view` = the 9 values of `View` (in / out), `rec` = 512 bytes;

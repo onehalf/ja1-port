@@ -410,18 +410,23 @@ fn day_verdict(w: *mut Ja1World, h: *const Ja1Host) -> i32 {
     let cap = rd(w, PROCESS_CAP);
     let start_cap = unsafe { (*w).start_cap };
     if cap > start_cap && cap > 20 {
-        q = match cap as u32 {
-            45 => 0x50,
-            50 => 0x53,
-            55 => 0x4D,
-            75 => 0x59,
-            80 => 0x56,
-            85 => 0x5C,
-            110 => 0x5F,
-            _ => q,
+        let quote = match cap as u32 {
+            45 => Some(0x50),
+            50 => Some(0x53),
+            55 => Some(0x4D),
+            75 => Some(0x59),
+            80 => Some(0x56),
+            85 => Some(0x5C),
+            110 => Some(0x5F),
+            _ => None,
         };
-        v.say(by_score(q, score));
-        v.said = true;
+        // Port fix P20 (#71, #2 row 62): a capacity with no quote in the table gives no remark (the day goes on as
+        // with no capacity change); in 1.13b it says q + signum(score), JAC 998..1000 past the end of JACQUOTE.EDT.
+        if quote.is_some() || !crate::fanfix::port_on(20) {
+            q = quote.unwrap_or(q);
+            v.say(by_score(q, score));
+            v.said = true;
+        }
     } else if cap < start_cap {
         let p = if rd(w, PLANTS_OWNED) < unsafe { (*w).start_plants } { 0x62 } else { 0x65 };
         v.say(by_score(p, score));
@@ -533,6 +538,10 @@ fn day_bonus(w: *mut Ja1World, h: *const Ja1Host) {
             let exp = rd(w, DAY_EXPENSES);
             a32_put(w, BALANCE, wd.prev_balance.wrapping_add(income).wrapping_sub(exp));
             a32_put(w, DAY_NET, income.wrapping_sub(exp));
+            if crate::fanfix::on(41) {
+                // #70 F41: 1.15m TickGuideBonus? 0x6165C -> helper 0x6233E also adds the bonus to g_prevBalance.
+                wd.prev_balance = wd.prev_balance.wrapping_add(wd.bonus as i16 as i32);
+            }
             wd.bonus = 0;
         }
         wd.bonus_due = 0;

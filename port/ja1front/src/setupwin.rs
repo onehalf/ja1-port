@@ -13,8 +13,7 @@ pub fn run(iso: &str, exe: &str) -> ! {
     for b in &bad {
         eprintln!("{}", b);
     }
-    let saves = std::path::Path::new("saves");
-    let mut s = Setup::new(iso, exe, v, |f| saves.join(f).exists()).unwrap_or_else(|c| super::fail("setup", c));
+    let mut s = Setup::new(iso, exe, v).unwrap_or_else(|c| super::fail("setup", c));
     if std::env::var_os("JA1_SETUP_WIDTHS").is_some() {
         // Test lines: the pixel width of every row label with every value.
         for line in s.label_widths() {

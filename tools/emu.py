@@ -63,12 +63,13 @@ class EmuStop(Exception):
 
 
 class Emu:
-    def __init__(self, dump=None, fast=False):
+    def __init__(self, dump=None, fast=False, ver=None):
         """dump = a 16 MB guest memory snapshot (jactl dump / xdump.sh file, or bytes): the whole machine state is
         mapped flat at 0 (DOS/4GW, paging off) and code runs where DOS/4GW loaded it: use e.rt(image_addr).
         fast = hook only stub addresses and the return sentinel (no per-instruction Python callback: ~50x faster;
-        no tracing, e.count stays 0, the step limit is Unicorn's instruction count)."""
-        self.img = load()
+        no tracing, e.count stays 0, the step limit is Unicorn's instruction count).
+        ver = None (rom/JA.EXE) or "115m": the unofficial fan patch jam115.exe with its tail code (#70)."""
+        self.img = load(ver)
         self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
         self.dump = None
         if dump is not None:
@@ -78,7 +79,7 @@ class Emu:
             self.uc.mem_map(0, (len(mem) + PAGE - 1) & ~(PAGE - 1))
             self.uc.mem_write(0, bytes(mem))
         for o in self.img.objs if dump is None else ():
-            size = (o.vsize + PAGE - 1) & ~(PAGE - 1)
+            size = (len(o.data) + PAGE - 1) & ~(PAGE - 1)
             self.uc.mem_map(o.base, size)
             self.uc.mem_write(o.base, bytes(o.data))
         self.uc.mem_map(STACK_TOP - STACK_SIZE, STACK_SIZE)
@@ -126,6 +127,41 @@ class Emu:
                     uc.hook_del(h[0])
             h[0] = self.uc.hook_add(UC_HOOK_CODE, hit, None, ra, ra)
         self.cov = None
+
+    def put_115m(self, only=None):
+        """#70: put the code of the fan patch 1.15m (jam115.exe) over this emulator's code: obj1 bytes where 1.13b
+        and 1.15m differ, plus the tail code past obj1's vsize. Data (obj2) stays. In dump mode a changed byte
+        inside a relocated dword keeps the dump's relocation (1.15m adds no fixups). only = [(lo, hi), ...]: write
+        only the changed bytes inside these linear ranges, and the whole tail (one fix of a function that holds
+        other 1.15m changes too). Returns the bytes written."""
+        if self.img is load("115m"):
+            return 0
+        a, b, o = load("113b").objs[0], load("115m").objs[0], self.img.objs[0]
+        sites = {}
+        for f in load("115m").fixups:
+            if f.stype == 7 and o.base <= f.src < o.base + o.vsize:
+                for k in range(4):
+                    sites[f.src + k] = f.src
+        n, done = 0, set()
+        d = self.rt(o.base) - o.base          # one delta for obj1 and its last page (the tail is past vsize)
+        for i in range(len(b.data)):
+            if i < len(a.data) and a.data[i] == b.data[i]:
+                continue
+            lin = o.base + i
+            if only is not None and i < len(a.data) and not any(lo <= lin < hi for lo, hi in only):
+                continue
+            s0 = sites.get(lin)
+            if s0 is None:
+                self.uc.mem_write(lin + d, bytes([b.data[i]]))
+                n += 1
+            elif s0 not in done:
+                done.add(s0)
+                j = s0 - o.base
+                old, new = (struct.unpack_from("<I", x.data, j)[0] for x in (a, b))
+                live = struct.unpack("<I", self.uc.mem_read(s0 + d, 4))[0]
+                self.uc.mem_write(s0 + d, struct.pack("<I", (new + live - old) & 0xFFFFFFFF))
+                n += 4
+        return n
 
     def rt(self, addr):
         """image address -> address in this emulator (differs only in dump mode)"""

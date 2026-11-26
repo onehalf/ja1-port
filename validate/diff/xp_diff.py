@@ -1,6 +1,8 @@
 """Differential test: tools/xpchange.py (the morning stat changes) vs ExperienceChangeMsg? 0x45BBC in Unicorn.
 
-usage: .venv/bin/python validate/diff/xp_diff.py [N=1000] [DUMP ...] [--seed S] [-v] [--port]
+usage: .venv/bin/python validate/diff/xp_diff.py [N=1000] [DUMP ...] [--seed S] [-v] [--port] [--fan IDS]
+--fan IDS (with --port; #70): the original side runs the fan patch 1.15m code (Emu.put_115m), the port runs with
+the fan fixes IDS on (`all` or `F03`); the plain --port run checks the fixes off against 1.13b.
 --port: the clean-room library (ja1_stat_changes, port_lib) instead of the mirror; its host ops 282..287
 (port_api.md) are mapped to the original's logged calls.
 First the salary step 0x62DA8 (x 1.5 / x 2/3 on the x87, then rounded) for 3000 salaries each way, then N cases:
@@ -31,6 +33,14 @@ PORT = "--port" in sys.argv
 if PORT:
     import port_lib                  # noqa: E402
     port_lib.STATS = True            # stat_progress, stat_changed
+FAN = None
+if "--fan" in sys.argv:
+    v = sys.argv[sys.argv.index("--fan") + 1]
+    args = [a for a in args if a != v]
+    dumps = [a for a in dumps if a != v] or [os.path.join(ROOT, "build", f"mem_{d}.bin") for d in DUMPS]
+    FAN = (1 << 128) - 1 if v == "all" else sum(1 << (int(x.strip()[1:]) - 1) for x in v.split(","))
+    if not PORT:
+        raise SystemExit("xp_diff: --fan needs --port")
 
 
 def salary_test(e, rng):
@@ -50,6 +60,9 @@ def salary_test(e, rng):
 
 def run_dump(path, rng, n):
     e = Emu(dump=path, fast=True)
+    if FAN is not None:
+        e.put_115m()
+    port_lib.fan_fixes(FAN or 0) if PORT else None
     rt = e.rt
     dd = rt(0x90000) - 0x90000
     log = []
@@ -239,7 +252,7 @@ def main():
             sys.exit(2)
         fails += run_dump(d, rng, per)
         total += per
-    print(f"xp_diff{' --port' if PORT else ''}: {total} cases on {len(dumps)} dumps, {fails} mismatches")
+    print(f"xp_diff{' --port' if PORT else ''}{f' --fan {FAN:#x}' if FAN is not None else ''}: {total} cases on {len(dumps)} dumps, {fails} mismatches")
     sys.exit(1 if fails else 0)
 
 

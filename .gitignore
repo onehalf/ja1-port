@@ -9,6 +9,7 @@ analysis/
 gfx/
 # DOSBox scratch copy and screenshots of the original
 validate/run/
+validate/run115/
 validate/shots/
 # Watcom libraries for ./t libid (copyrighted; supply your own)
 third_party/

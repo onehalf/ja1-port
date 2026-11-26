@@ -170,13 +170,31 @@ fn blight_spread(w: *mut Ja1World) -> bool {
     changed
 }
 
+/// #70 F40, 1.15m tail 0x8AC93 past its "story 0x0B = 1" test: story 0x09 = 2, story 0x06 = 2, story 0x0B < 1
+/// (signed), sector 27 not owned; then quest record 6 is loaded (host op 307) and the answer is yes when one of its
+/// 25 pairs (words +0 and +6) has both sectors not owned. The same test as the kidnapping start (guide.rs 9a)
+/// without its guide-queue condition.
+fn kidnap_due(w: *mut Ja1World, ai: &Ai) -> bool {
+    if s(w, 0x09) != 2 || s(w, 0x06) != 2 || s(w, 0x0B) as i8 >= 1 || sec(w, 27, FLAGS) & 1 != 0 {
+        return false;
+    }
+    let mut q = [0u8; 250];
+    ai.call_out(op::QUEST_RECORD, &[6], &mut q);
+    let s16 = |o: usize| i16::from_le_bytes([q[o], q[o + 1]]) as i32;
+    (0..25).any(|i| sec(w, s16(10 * i), FLAGS) & 1 == 0 && sec(w, s16(10 * i + 6), FLAGS) & 1 == 0)
+}
+
 fn story_day(w: *mut Ja1World, h: *const Ja1Host) {
     let ai = Ai { w, h, s: 0 };
     q_put(w, 0, 0);
     for i in [1, 3, 5, 6] {
         q_put(w, i, 0xFF);
     }
-    let helper = |w| s(w, 0x0B) as i8 == 1 || s(w, 0x15) != 0;
+    // #70 F40: 1.15m StoryDayEvents? 0x61E38 / 0x61EA7 / 0x61F2B call tail 0x8AC93 in place of "story 0x0B = 1":
+    // it also answers yes when the Brenda kidnapping is due today (kidnap_due), so the blight event leaves guide
+    // queue slots 5 and 6 free and both quests start on the same day.
+    let b_is_1 = |w| s(w, 0x0B) as i8 == 1 || (crate::fanfix::on(40) && kidnap_due(w, &ai));
+    let helper = |w| b_is_1(w) || s(w, 0x15) != 0;
     if s(w, 0x0A) as i8 == 1 {
         if s(w, 0x20) != 0 {
             if helper(w) {
@@ -191,7 +209,7 @@ fn story_day(w: *mut Ja1World, h: *const Ja1Host) {
                 rec_put(w, n, 0xAB, 0);
             }
             s_put(w, 0x0A, 2);
-        } else if s(w, 0x21) != 0 && s(w, 0x0B) as i8 != 1 && s(w, 0x15) == 0 {
+        } else if s(w, 0x21) != 0 && !b_is_1(w) && s(w, 0x15) == 0 {
             s_put(w, 0x22, s(w, 0x22).wrapping_sub(1));
             if s(w, 0x22) as i8 <= 0 {
                 s_put(w, 0x20, 1);

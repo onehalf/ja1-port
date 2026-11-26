@@ -348,6 +348,23 @@ impl SlotList {
             return;
         }
         let r = self.read_key();
+        // Port fix P07 (#2 rows 26, 27): the key reader's signs of Home, Left, Right, End and Delete (none of them
+        // is an allowed key) go to the cursor keys of the raw-key step, not into the name.
+        if ja1logic::fanfix::port_on(7) {
+            let k = match r {
+                b']' => 0x4F,
+                b'[' => 0x47,
+                b'<' => 0x4B,
+                b'>' => 0x4D,
+                0x7F => 0x53,
+                _ => 0,
+            };
+            if k != 0 {
+                self.raw_op(k);
+                self.name_pass_end(p, cancel, false);
+                return;
+            }
+        }
         let mut done = false;
         match r {
             0 => match self.keys.pop_front() {

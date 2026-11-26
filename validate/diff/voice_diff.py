@@ -13,6 +13,8 @@ Cases: N random speaker and name pairs, every pair over 32768 bytes, the digit b
 the old size at the file position after the directory; speaker 29 has no 40.VOC, a player can reach this), speakers 0x40 and up (nothing loads), each of the 5 cries of the MercQuoteEvent? sites
 for each speaker, the death cry, the 4 tactical effects per soldier slot of LoadMercVoices, and the speech stream with Sound FX on and off
 (rate, volume, and that the refill runs), the banks slot by slot, the click sound, the speech stop. LipSyncReset is stubbed: faceanim_diff tests the mouth.
+--pfix 18 (#71, #2 row 51): the original with the cave at LoadVocSample 0x5C98B (a missed member plays nothing), the port with
+port fix P18 on.
 """
 import ctypes
 import os
@@ -28,6 +30,8 @@ from emu import Emu  # noqa: E402
 from unicorn.x86_const import UC_X86_REG_ESP  # noqa: E402
 
 argv = sys.argv[1:]
+import pfix  # noqa: E402
+PFIX = pfix.parse(argv)
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
 args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
@@ -224,6 +228,13 @@ def members(p):
 
 def main():
     o = Orig()
+    if PFIX:
+        class _FrontFixes:          # the port side is libja1front: its own copy of the fix masks
+            @staticmethod
+            def port_fixes(m):
+                PORT.ja1_port_fixes_set.argtypes = [ctypes.c_uint64]
+                PORT.ja1_port_fixes_set(m)
+        pfix.apply(o.e, PFIX, _FrontFixes)
     rng = random.Random(11)
     bad = total = 0
 
@@ -266,7 +277,7 @@ def main():
     flag, ended = o.stop()
     same("speech stop", (flag, ended), (b"\0\0", 1))
     same("speech stop port", b"none", port(11, 0, 0) or b"none")
-    print(f"voice_diff: {total} cases, {bad} mismatches")
+    print(f"voice_diff{' --pfix ' + ','.join(map(str, PFIX)) if PFIX else ''}: {total} cases, {bad} mismatches")
     sys.exit(1 if bad else 0)
 
 

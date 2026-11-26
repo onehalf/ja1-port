@@ -1,6 +1,6 @@
 """Differential test: tools/ai.py deciders vs the original AI functions in Unicorn.
 
-usage: .venv/bin/python validate/diff/ai_diff.py [DUMP] [n=12000] [--only NAME[,NAME...]] [--group K/N]
+usage: .venv/bin/python validate/diff/ai_diff.py [DUMP] [n=12000] [--only NAME[,NAME...]] [--group K/N] [--fan IDS|all (with --port --only take_damage / end_task / swap_places / walk_end; #70 F08..F14)]
 Each case takes an enemy record from the snapshot, fuzzes the bytes the AI reads (AI type, alert state, orders/attitude,
 energy, hp, AP, facing, flags, the tile's 0x80 bit, the water bytes) and the globals (alarm, combat, enemies left),
 then runs one decider in both. Random 0x53538 (biased to multiples of 5 and one below: every threshold constant
@@ -57,7 +57,7 @@ CALLEES = {"idle": (0x5AFA4, "s"), "noise_tile": (0x7038C, "s"), "find_dry_tile"
            "w_19eb0": (0x19EB0, "ti"), "w_35774": (0x35774, "ii"), "w_3c16c": (0x3C16C, "sti"),
            "workable": (0x41E1C, "xi"), "explode_art": (0x33BD4, "ii"), "w_3c05c": (0x3C05C, "ii"),
            "merc_text": (0x15910, "smi"), "mine_flag": (0x19D74, "st"), "walter_say": (0x3C985, "n"), "enemy_turned": (0x73578, "s"),
-           "guard_turned": (0x7351C, "s"), "w_11448": (0x11448, "s"), "w_17b70": (0x17B70, "bi"), "w_3f490": (0x3F490, "ii"),
+           "guard_turned": (0x7351C, "s"), "w_11448": (0x11448, "s"), "w_17b70": (0x17B70, "bi"), "w_3f490": (0x3F490, "ii"), "w_3f578": (0x3F578, "i"),
            "quote": (0x3C574, "st"), "w_58574": (0x58574, "s"), "use_special": (0x63458, "s"),
            "door_fx": (0x3B03C, "stb"), "popups": (0x288DC, "si"), "w_3cdd4": (0x3CDD4, "s"),
            "w_3cfd0": (0x3CFD0, "stb"), "bury_mine": (0x3CB24, "st"), "w_401b4": (0x401B4, "sb"),
@@ -148,8 +148,9 @@ DECIDERS = {"update_alert": (0x6D574, ai.update_alert), "calm_action": (0x6DB10,
             "turn_rest": (0x32D04, ai.turn_rest), "aid_tick": (0x15260, ai.first_aid_tick),
             "apply_aid": (0x39CA4, ai.apply_first_aid), "first_aid": (0x3D750, ai.first_aid_start), "start_turn": (0x11FB4, ai.start_turn), "bleed": (0x15034, ai.bleed), "drown": (0x3843C, ai.drown), "merc_interrupt": (0x73D28, ai.merc_interrupt), "enemy_interrupt": (0x73F3C, ai.enemy_interrupt), "swap_hand": (0x55B0C, ai.swap_hand), "busy": (0x5AD1C, ai.soldier_busy)}
 MEMRUN = {"active_frame", "kill", "shot_alert", "start_attack", "end_task", "fire", "aid_tick", "apply_aid", "first_aid"}         # the port runs on emulator memory (it writes other records that may be the soldier's)
-MAPCMP = {"active_frame", "soldier_frame", "walk_step", "walk_blocked", "xra_enemy", "use_on_tile", "trigger", "start_attack", "merc_dies", "anim_frame", "hears", "land_item", "melee_hit", "turn_rest", "start_turn", "kill"}       # move occupants on the tile map: the map is compared too (kill: Put item writes byte 6; restored between runs)
+MAPCMP = {"active_frame", "soldier_frame", "walk_step", "walk_blocked", "xra_enemy", "use_on_tile", "trigger", "start_attack", "merc_dies", "anim_frame", "hears", "land_item", "melee_hit", "turn_rest", "start_turn", "kill", "bury_mine"}       # move occupants on the tile map: the map is compared too (kill, bury_mine: Put item writes byte 6; restored between runs)
 MAP_HI = G_TILEMAP + 8 * (3136 + 64)       # compared: the pointer table 0x100958, the map and 64 tiles past it
+MCCMP = {"trigger"}               # --fan 51: the move-code table is compared too (TriggerItem? 0x1AE80 / 0x1AF42)
 VIEW_EDGE = {"active_frame", "soldier_frame", "start_turn"}   # MercView rays past the top edge write before the map (into soldier 0x2F): restored too
 
 
@@ -174,7 +175,20 @@ only = argv[argv.index("--only") + 1] if "--only" in argv else None
 if only:
     del argv[argv.index("--only"):argv.index("--only") + 2]
 ONLY = set(only.split(",")) if only else set()   # --only a,b,c: several sections
-PORT_SECTIONS = ("kept_turn", "sector_won", "swap_places", "next_enemy", "next_merc", "mission_cancel", "disarm", "mine_spotted", "blast_tile", "blast", "gas_tick", "sector_tick", "explode", "effect_hit", "pay", "view", "rebuild", "radio_result", "quest_check", "action_ap", "shot_ap", "sector_value", "slot_reset", "equip", "guard_leaves", "merc_entry", "put_item", "pickup", "init_soldier", "supplies", "patches", "ground_blast", "tmp_file", "sector_start", "move", "loop", "ticks", "turn_end", "turn_flow", "turn_new", "turn_start", "select_merc", "hide_path_marks", "loop_rest", "fuses", "loop_head", "leave_tests", "door_fx", "doors", "reload", "make_noise", "leave_sector", "leave_path", "end_of_day", "connected", "ledger", "escape_stop", "walk_in", "explode_dat")   # direct sections with a --port branch
+PORT_SECTIONS = ("kept_turn", "sector_won", "swap_places", "next_enemy", "next_merc", "mission_cancel", "disarm", "mine_spotted", "blast_tile", "blast", "gas_tick", "sector_tick", "explode", "effect_hit", "effect_pass", "pay", "view", "rebuild", "radio_result", "quest_check", "action_ap", "shot_ap", "sector_value", "slot_reset", "equip", "guard_leaves", "merc_entry", "put_item", "pickup", "init_soldier", "supplies", "patches", "ground_blast", "tmp_file", "sector_start", "move", "loop", "ticks", "turn_end", "turn_flow", "turn_new", "turn_start", "select_merc", "hide_path_marks", "loop_rest", "fuses", "loop_head", "leave_tests", "door_fx", "doors", "reload", "make_noise", "leave_sector", "leave_path", "end_of_day", "connected", "ledger", "escape_stop", "walk_in", "explode_dat")   # direct sections with a --port branch
+FAN_RUNS = {8: [(0x39A2F, 0x39A35), (0x39A3F, 0x39A5E), (0x39A8B, 0x39A8C)], 9: [(0x39A9B, 0x39A9D)], 10: [(0x3974D, 0x3975B), (0x3998A, 0x3999B)], 11: [(0x3996B, 0x39981)], 12: [(0x3DA57, 0x3DA60)], 13: [(0x3F8D0, 0x3F909)], 14: [(0x1B98F, 0x1B991)], 15: [(0x124CA, 0x124D3), (0x18E98, 0x18EC4)], 17: [(0x72FCD, 0x72FE0), (0x73360, 0x73373), (0x7352C, 0x73546)], 18: [(0x1125D, 0x11285), (0x1220D, 0x12239), (0x5F216, 0x5F24B), (0x3D4D5, 0x3D4E2)], 19: [(0x12B50, 0x12B59)], 20: [(0x126D1, 0x126E6), (0x12702, 0x12706), (0x1277C, 0x1277E), (0x127D4, 0x127D6), (0x127E2, 0x127E5), (0x129C9, 0x129D5), (0x12BE0, 0x12C13)], 21: [(0x30B28, 0x30B2D), (0x30C4C, 0x30C4E)], 22: [(0x30F7D, 0x30F82), (0x4889B, 0x488A6)], 23: [(0x1F3A9, 0x1F3B3), (0x1F3FF, 0x1F410), (0x18E35, 0x18E3A), (0x18E78, 0x18E7F), (0x18F18, 0x18F1D), (0x18FC8, 0x18FCA), (0x18FE4, 0x18FE9), (0x192A4, 0x192CD)], 24: [(0x1A588, 0x1A589), (0x1BF45, 0x1BF46)], 25: [(0x1A757, 0x1A787)], 26: [(0x50F75, 0x50F8A), (0x62356, 0x62360)], 28: [(0x11358, 0x113EA)], 29: [(0x12D55, 0x12DD3), (0x1BCDF, 0x1BCE0), (0x1BCEB, 0x1BCF7), (0x130C7, 0x130D0), (0x13103, 0x13155)], 30: [(0x35225, 0x352F6), (0x35517, 0x35521)], 32: [(0x5AD6A, 0x5AD99)], 33: [(0x35590, 0x355C6)], 34: [(0x351A7, 0x351AC), (0x351D5, 0x351F9), (0x18EC4, 0x18F08)], 35: [(0x2B52F, 0x2B53D), (0x2B54D, 0x2B54F), (0x2B562, 0x2B564), (0x2B5B7, 0x2B5C0), (0x2B5C9, 0x2B5CE)], 36: [(0x6D476, 0x6D48D), (0x6D4DE, 0x6D4E0)], 37: [(0x59A77, 0x59A78), (0x59A94, 0x59A95)], 38: [(0x12F23, 0x12F2B), (0x12F6B, 0x12F72), (0x2AC69, 0x2ACA6)], 39: [(0x1F707, 0x1F70D)], 41: [(0x44616, 0x44620), (0x62344, 0x62356)], 43: [(0x32D90, 0x32D95), (0x388BE, 0x388C3), (0x38DF9, 0x38DFE), (0x38FA9, 0x38FAE), (0x39031, 0x39037), (0x566F7, 0x566FC), (0x5671D, 0x56723), (0x56E05, 0x56E0A), (0x58C50, 0x58C55), (0x59187, 0x5918C), (0x6DB37, 0x6DB3C), (0x6EBB1, 0x6EBB6), (0x72151, 0x72156), (0x72181, 0x72186), (0x721B6, 0x721BB), (0x722AE, 0x722B3), (0x722DE, 0x722E4), (0x7231D, 0x72322), (0x7246E, 0x72473), (0x7249C, 0x724A1), (0x725FB, 0x72600)], 44: [(0x2F50D, 0x2F52C), (0x2F580, 0x2F588)], 47: [(0x40B52, 0x40B5A), (0x2C570, 0x2C5A7)], 48: [(0x1A057, 0x1A05D), (0x48249, 0x48267)], 49: [(0x3CB2D, 0x3CB36), (0x3CB6F, 0x3CB71), (0x3CBB3, 0x3CBBF), (0x3CC06, 0x3CC0E), (0x3CC2C, 0x3CC38), (0x3FE43, 0x3FE50)], 50: [(0x3FE2E, 0x3FE33), (0x488A6, 0x488FB)], 51: [(0x173E5, 0x173EA), (0x19D6C, 0x19D71), (0x1AE80, 0x1AE85), (0x1AF42, 0x1AF47), (0x5A855, 0x5A85E)], 52: [(0x3FE43, 0x3FE50), (0x57060, 0x5706B), (0x5711E, 0x57133), (0x572FA, 0x57303), (0x574E9, 0x574F2), (0x57562, 0x57566)], 53: [(0x50EF6, 0x50EFC)], 54: [(0x3D412, 0x3D418), (0x3D4B5, 0x3D4D5)], 56: [(0x3C328, 0x3C32D), (0x42770, 0x42780), (0x3C346, 0x3C34C), (0x1B6D6, 0x1B6F3), (0x3D5B6, 0x3D5BC), (0x3D5CF, 0x3D5D4), (0x3D609, 0x3D619), (0x3CEC0, 0x3CEC7), (0x3CF21, 0x3CF27), (0x3CF5A, 0x3CF6A)], 55: [(0x3D2B6, 0x3D2E1), (0x3D436, 0x3D43B), (0x2118B, 0x21198), (0x3D4F4, 0x3D50A)], 57: [(0x59B61, 0x59B67), (0x59B9E, 0x59C01)], 59: [(0x35225, 0x352F6)], 58: [(0x58C6C, 0x58CBF), (0x58CCE, 0x58CD9), (0x58DDC, 0x58DDE), (0x71C68, 0x71C73)], 68: [(0x39B31, 0x39B51), (0x39B83, 0x39B89), (0x38427, 0x3843C), (0x174E0, 0x174E5), (0x54CB1, 0x54D07)], 69: [(0x1763A, 0x17643), (0x24019, 0x24022)], 70: [(0x1BA9F, 0x1BABE), (0x1BB0C, 0x1BB19)], 61: [(0x12A17, 0x12A1C), (0x13033, 0x13038), (0x14C75, 0x14C7A), (0x1A650, 0x1A655), (0x1BFBF, 0x1BFC4)]}   # 8..11 TakeDamage, 12 EndTask, 13 PlaceAt, 14 WalkEnd (StopWalk -1), 15 EnemiesTurn? bled slide (cave 0x18E98), 17 down opponents seen (SightCheck, MarkSeen, 0x7351C), 18 fuses by tick step + time compression off (TacticalTimer?, TacticalLoop fuses, EndTurn?, helper 0x3D4D5), 19 New turn stage needs Santino spoke = 2 (NewTurn? 0x12B50), 20 New turn redraw_next before step 8 (NewTurn?; row 87 entry calls left out)   # #70 TakeDamage
+FAN = None                         # --fan IDS (with --port, --only take_damage / end_task / swap_places / walk_end): F08..F14 bytes of 1.15m (Emu.put_115m)
+# #71 port fixes: --pfix IDS (with --port) = the port's Pnn mask bits on, and the ORIGINAL gets the same fix as an asm
+# patch (validate/diff/pfix.py). Without --pfix the port must keep the bug (level off / 1.15m).
+import pfix
+PFIX = pfix.parse(argv)
+if "--fan" in argv:
+    v_ = argv[argv.index("--fan") + 1]
+    del argv[argv.index("--fan"):argv.index("--fan") + 2]
+    FAN = sorted(FAN_RUNS) if v_ == "all" else [int(x_.strip().lstrip("Ff")) for x_ in v_.split(",")]
+    ai.FAN_FIXES = set(FAN)   # (the mirror's MercView: F61)
+    if "--port" not in argv or not ONLY or not ONLY <= {"view", "w_59ae8", "move_ap_cost", "mine_spotted", "pickup_here", "use_on_tile", "impact", "land_item", "bury_mine", "put_item", "effect_hit", "effect_pass", "pickup", "find_path", "path_ap", "walk_step", "w_59a54", "think", "take_damage", "end_task", "swap_places", "walk_end", "turn_end", "sight_check", "mark_seen", "guard_turned", "fuses", "ticks", "turn_new", "end_of_day", "leave_sector", "anim_step", "active_frame", "ledger", "leave_path", "turn_flow", "anim_frame", "melee_hit", "attack_go", "explode_dat", "merc_entry", "start_turn", "pay", "throw_option", "gun_option", "knife_option", "hit_location", "can_stand_at", "engaged_action", "calm_action", "w_32d04", "turn_rest", "w_56dd4", "launch", "blast_tile", "sector_start", "trigger"}:
+        raise SystemExit("ai_diff: --fan needs --port --only take_damage / end_task / swap_places / walk_end / turn_end / sight_check / mark_seen / guard_turned")
 PORT = "--port" in argv            # rebuild + the AI deciders in port_lib.AI_ENTRY: compare the clean-room port (validate/diff/port_lib.py) instead of tools/ai.py
 if PORT:
     argv.remove("--port")
@@ -283,6 +297,19 @@ dump = paths[0] if paths else os.path.join(HERE, "..", "..", "build", "mem_tac60
 rng = random.Random(int(os.environ.get("AI_DIFF_SEED", "6")))
 e = Emu(dump=dump, fast=True)
 rt = e.rt
+if FAN is not None:                # original: only these fixes' 1.15m bytes; port: only their mask bits
+    e.put_115m(only=[r_ for f_ in FAN for r_ in FAN_RUNS[f_]])
+    if 17 in FAN:                  # 1.15m 0x72FCF F6 8F = TEST r/m8, imm8 in its undocumented /1 form (real x86 and
+        e.uc.mem_write(rt(0x72FD0), b"\x87")   # DOSBox run it as /0); Unicorn refuses /1: the same insn as /0
+    if 23 in FAN:                  # 1.15m AnimFrame 0x192A4 F6 C8 01 = TEST al, 1 in the /1 form: Unicorn needs /0
+        e.uc.mem_write(rt(0x192A5), b"\xC0")
+    port_lib.fan_fixes(sum(1 << (f_ - 1) for f_ in FAN))
+    if 52 in FAN:                  # F52: 1.15m LandItem? returns PutItem's tile (0x3FE43 EDI): compare EAX
+        VOID.discard("land_item")
+        MASK["land_item"] = 0xFFFF
+        port_lib.VOID_ENTRY = tuple(v_ for v_ in port_lib.VOID_ENTRY if v_ != "land_item")
+if PFIX is not None:               # original: the asm form of each port fix; port: its P mask bits
+    pfix.apply(e, PFIX, port_lib)
 KIND = {}
 SP = {rt(G_SOLDIERS) + 0x200 * k: k for k in range(0x30)}   # emulator soldier address -> slot
 log, script = [], {}
@@ -294,13 +321,19 @@ def take(name):
 
 
 UOT_RNG = random.Random(4242)
+UOG_RNG = random.Random(4343)   # use_on_tile: which r <= 0 prompt answers also clear the tile's item byte
 
 
 def uot_port_script():
     """--port use_on_tile: the prompt (op 248) and mine check (op 247) answers. (This script is made before the case
     setup, which then draws cur_sector: a filter on cur_sector here would read the value before the case.)"""
     d = [UOT_RNG.choice([0, 1, 1, 0xFFFFFFFF, 2]) for _ in range(2)]    # own rng: the shared one stays as in the mirror run
+    d = [(r_, 1) if r_ in (0, 0xFFFFFFFF) and UOG_RNG.random() < 0.5 else r_ for r_ in d]   # (r, 1): the prompt
+    # took the item off the tile (byte 6 = 0xFF), as a set-off or a pick-up inside DisarmExplosivePrompt does: the
+    # r <= 0 path then finds no item on the tile (UseOnTile? 0x3D5FA TileItemIndex -> 0xFF, jge 0x3D62B)
     m = UOT_RNG.choice([0, 0, 1])
+    if FAN and 56 in FAN and F56_RNG.random() < 0.4:
+        m = 0xFF                         # F56: MineSpotted? -1 (an effect on the own tile)
     return {"disarm": d, "mine_spotted": [m]}
 
 
@@ -308,14 +341,38 @@ PUH_RNG = random.Random(4343)
 LK_RNG = random.Random(4545)    # lock_kit: own stream (the other sections keep their cases)
 MF_RNG = random.Random(4646)    # mine_flag: own stream
 WL_RNG = random.Random(4747)    # walter: own stream
+F33_RNG = random.Random(3333)   # melee_hit: the queued action +0x1A6 (own stream: the old cases stay)
+F59_RNG = random.Random(5959)   # melee_hit under --fan 59: an off-map target tile (own stream)
+F61_RNG = random.Random(6161)   # active_frame --fan 61: AP under the reserve, step within the AP
+F24_RNG = random.Random(2424)   # soldier_frame --fan 24: AP under the reserve
 SFC_RNG = random.Random(4949)   # soldier_frame not-done-with-target refusal (u_move_to step 2): own stream
 TIE_RNG = random.Random(5050)   # engaged_action equal option scores: own stream
+F56_RNG = random.Random(5656)   # mine_spotted / use_on_tile / pickup_here --fan 56
+F55_RNG = random.Random(5555)   # use_on_tile --fan 55: the tile in the blast list
+F68_RNG = random.Random(6868)   # --fan 68: broken bridge pieces (25300 on water) and their 25400 neighbours
+
+
+def f68_bridges(centre, n=None):
+    """--fan 68 (#70 row 71): some tiles near `centre` become code 25300 on a water ground byte (t0 >= 0x6C) or not,
+    with t1 0x1C / 0x1F (not water) or another object; some neighbours get the bridge deck code 25400 (own rng)."""
+    if not (FAN and 68 in FAN):
+        return
+    for _ in range(F68_RNG.choice([0, 3, 12]) if n is None else n):
+        t_ = min(3135, max(0, centre + F68_RNG.choice([0, 1, -1, 56, -56, 57, F68_RNG.randrange(-120, 120)])))
+        e.w16(rt(ai.G_MOVECODE) + 2 * t_, F68_RNG.choice([25300, 25300, 25300, 25400, 1000]))
+        e.w8(rt(G_TILEMAP) + 8 * t_, F68_RNG.choice([0x6B, 0x6C, 0x80, 0xFF, 0x10]))
+        e.w8(rt(G_TILEMAP) + 8 * t_ + 1, F68_RNG.choice([0x1C, 0x1F, 0, 0x21, 0x26, F68_RNG.randrange(256)]))
+
+
 UOL_RNG = random.Random(4848)   # use_on_tile lock values + crowbar: own stream (the other sections keep their cases)
 
 
 def puh_port_script():
     """--port pickup_here: the prompt (op 248) and mine check (op 247) answers (own rng, as uot_port_script)."""
-    return {"disarm": [PUH_RNG.choice([0, 1, 1, 0xFFFFFFFF, 2])], "mine_spotted": [PUH_RNG.choice([0, 0, 1])]}
+    m = PUH_RNG.choice([0, 0, 1])
+    if FAN and 56 in FAN and F56_RNG.random() < 0.4:
+        m = 0xFF                         # F56: MineSpotted? -1 (an effect on the own tile)
+    return {"disarm": [PUH_RNG.choice([0, 1, 1, 0xFFFFFFFF, 2])], "mine_spotted": [m]}
 
 
 def conv(kinds, args):
@@ -350,6 +407,9 @@ def make_stub(name, kinds):
         v = take(name)
         if name == "find_path" and isinstance(v, tuple):   # (found, pathLen): FindPath sets +0xD4
             emu.w16(eax + 0xD4, v[1])
+            return v[0]
+        if name == "disarm" and isinstance(v, tuple):      # (r, 1): the prompt took the item off the tile
+            emu.w8(rt(G_TILEMAP) + 8 * (edx & 0xFFFF) + 6, 0xFF)
             return v[0]
         if name == "noise_tile" and isinstance(v, tuple):   # writes the loudness through EDX (unscripted: nothing)
             emu.w32(edx, v[1])
@@ -401,6 +461,8 @@ for name, (addr, kinds) in CALLEES.items():
     if name not in CASE_STUBS:
         e.stub(rt(addr), make_stub(name, kinds), POP.get(name, 0))
 e.stub_sprintf()
+if FAN and 32 in FAN:              # F32: 1.15m AttackGo? 0x5AD94 calls the anim test 0x5AD1C (1.13b inlines it): real
+    e.stubs.pop(rt(0x5AD1C), None)
 
 
 def stub_walter_say(emu, *_):
@@ -568,6 +630,46 @@ def IMPACT_OPS():
                 door_lookup=[rng.choice([0, 50, 101, 200])], puff=[rng.choice([0, 3, 0x80])] * 2)
 
 
+F39_RNG = random.Random(3939)   # start_turn --fan 39: duty bytes in the no-order cases
+F58_RNG = random.Random(5858)   # --fan 58: throw targets on the "past reach + 16" edge
+
+
+def f58_edge(s, slot, script):   # script = the case's base lists (both sides start from them)
+    """--fan 58 (#70 row 37): one seen opponent in play; the thrower stands on its row, left of it, so that the
+    nearest candidate tile (2 left of the opponent) is reach + 15..18 px away (ThrowChance distance, no goggles)."""
+    from combat import distance
+    opps = list(range(0x28, 0x30)) if slot < 0x28 else list(range(0x28))
+    j = F58_RNG.randrange(len(opps))
+    for j_ in range(len(opps)):
+        s[0x13A + j_] = 1 if j_ == j else F58_RNG.choice([0, 0, 0, 2])
+    if s[0x24] == 0x27:
+        s[0x24] = 0
+    h, en = ai.s8(s[0x183]), ai.s8(s[0x18A])
+    reach = e.r8(rt(ai.G_ITEM_RANGE + 12 * s[0])) * 15 + h - 50
+    reach = max(reach - ai.cdiv((100 - en) * reach, 200), 0)
+    dd = reach + F58_RNG.choice([15, 16, 16, 17, 17, 18])
+    dx = next((x for x in range(0, 900) if distance(0, 0, x, 0) == dd), None)
+    row = F58_RNG.randrange(56)
+    cols = [c for c in range(2, 56) if ai.tile_x(row * 56 + c - 2) - dx >= 0] if dx is not None else []
+    if not cols:
+        return
+    ot = row * 56 + F58_RNG.choice(cols)
+    a = rt(G_SOLDIERS) + 0x200 * opps[j]
+    e.w16(a + 0x114, ot)
+    for f_ in (0x182, 0x138):
+        e.w8(a + f_, F58_RNG.choice([1, 1, 3]))
+    e.w8(a + 0x183, F58_RNG.choice([1, 20, 60]))
+    ai.w16(s, 0x116, ai.tile_x(ot - 2) - dx)
+    ai.w16(s, 0x118, ai.tile_y(ot))
+    allies = range(0x28, 0x30) if slot >= 0x28 else range(0x28)
+    for k in allies:                  # the thrower is the only ally in play: TileDist runs ally, opponent per tile
+        if k != slot:
+            e.w8(rt(G_SOLDIERS) + 0x200 * k + 0x183, 0)
+    script["action_ap"] = [0] * 400
+    script["fire_line"] = [F58_RNG.choice([100, 100, 60])] * 400
+    script["tile_dist"] = [5, 0] * 3000
+
+
 def scripted(name):
     tiles = lambda: [rng.choice([ai.NO_TILE, rng.randrange(3136), rng.randrange(0x10000)]) for _ in range(4)]
     small = lambda: [rng.choice([0, 1, 5, 14, 15, 30, rng.randrange(0x10000)]) for _ in range(4)]
@@ -633,7 +735,8 @@ def scripted(name):
     if name == "impact":
         return dict(scripted("calm_action"), Random=[rng.choice([0, 1, 2, 20, 49, 99, rng.randrange(0x7FFF)]) for _ in range(8)],
                     bullet_damage=[rng.choice([1, 20, 31, 50, 60, 120, 130, 0x1FFFF])] * 2, door_lookup=[rng.choice([0, 50, 101, 200])],
-                    puff=[rng.choice([0, 3, 0x80])] * 2)
+                    puff=[rng.choice([0, 3, 0x80])] * 2,
+                    **({"land_item": [rng.choice([0, 1, 100, 3135, rng.randrange(3136)])]} if FAN and 52 in FAN else {}))   # F52: the landed tile
     if name == "pstep":
         return dict(scripted("calm_action"),
                     hit_test=[(int(rng.random() < 0.03) * rng.choice([1, 2, 0xFFFFFFFF]), rng.choice([0, 0, 10, 30]),
@@ -846,6 +949,10 @@ def fuzz_side(slot):
         p[0x183] = rng.choice([0, 14, 15, 19, 20, 39, 40, 75, 76, 100, rng.randrange(256)])
         p[0x184] = rng.choice([p[0x183], 100])
         p[0x185] = rng.choice([0, 0, rng.randrange(20)])
+        if FAN and 17 in FAN:      # F17: a down opponent at 0 health (+0x186 > 0) is seen in 1.15m
+            if rng.random() < .3:
+                p[0x183] = 0
+            p[0x186] = rng.choice([0, 1, 5, 0x7F, 0x80, 0xFF])
         for o in (0x18A, 0x18B, 0x18C, 0x191, 0x192, 0x1A5):
             p[o] = rng.choice([rng.randrange(101), rng.randrange(256), 100, 1])
         p[0x1A1] = rng.choice(list(range(1, 9)))
@@ -898,6 +1005,7 @@ def port_ai(name, ps, edx, ebx=0):
     port_lib.script_pos(rec, e, ai, True)
     bufs["soldiers"][0x200 * slot:0x200 * slot + 0x200] = rec
     crash = None                           # (soldiers, scalars) at the first div_zero call
+    pass_asked = [False]                   # op 358 effect_pass came before the next death_show
 
     def random_(k):
         k = ai.s16(k)
@@ -911,10 +1019,15 @@ def port_ai(name, ps, edx, ebx=0):
             if crash is None:              # the state at this point is observable, nothing after it
                 crash = (bytearray(bufs["soldiers"]), dict(scalars))
             raise ZeroDivisionError
+        if op == "effect_pass":            # op 358 (#70 row 30): MercDies? -> TacticalRedraw(1) runs the effect pass;
+            pass_asked[0] = True           # the original's call is the tac_redraw stub, logged at death_show
+            return 0, None
         if op == "death_show":             # op 186 (shooting.md Merc dies): the original's merc death display, its
             w_ = World(args[0])            # calls logged as the original's (the mirror's part on memory)
             w_.memrun = True
-            ai.merc_death_show(MemRec(args[0]), w_, args[1])
+            lib_ = PORT_LIB.get(name, 0) >> 63 & 1   # (bit 63 cleared: the library ran the pass itself)
+            ai.merc_death_show(MemRec(args[0]), w_, args[1], redraw=None if lib_ else pass_asked[0])
+            pass_asked[0] = False
             return 0, None
         if op == "cursor_reset":           # op 163: the original's two cursor bytes (Take damage)
             e.w8(rt(0x284F1D), 0xA1)
@@ -934,7 +1047,9 @@ def port_ai(name, ps, edx, ebx=0):
         if op == "guard_sees_msg":         # op 326 (ai.md Share sightings): the original's message call with its text
             log.append(("message", conv(CALLEES["message"][1], [rt(0x9AAF9)])))
             return take("message"), None
-        if op not in CALLEES and op != "reveal_view":
+        if op in ("w_67c54", "mouse_release") and op not in CALLEES:   # TimeCompress(0)'s button-up waits
+            return 0, None                 # (#70 F18 calls it from the fuses): the original side stubs 0x67C54 /
+        if op not in CALLEES and op != "reveal_view":                  # 0x67C68 silently (platform code)
             raise SystemExit(f"port called unknown host op {op} {args}")
         args = [a & 0xFFFFFFFF for a in args]     # register values, as the original's stubs log them
         if op == "reveal_view":            # runs for real in the original: the mirror on memory answers it
@@ -959,6 +1074,9 @@ def port_ai(name, ps, edx, ebx=0):
         if op == "hit_test":               # (stops, new skip, chance): skip and chance through the out record
             v = v or (0, 0, 100)
             return v[0], struct.pack("<BxxxI", v[1] & 0xFF, v[2] & 0xFFFFFFFF)
+        if op == "disarm" and isinstance(v, tuple):        # (r, 1): the prompt took the item off the tile
+            bufs["tiles"][8 * (args[1] & 0xFFFF) + 6] = 0xFF
+            return v[0], None
         if op == "find_path" and isinstance(v, tuple):     # (found, pathLen): the stub sets the record's +0xD4
             bufs["soldiers"][0x200 * args[0] + 0xD4:0x200 * args[0] + 0xD6] = struct.pack("<H", v[1] & 0xFFFF)
             return v[0], None
@@ -1056,6 +1174,9 @@ def port_merc_view(slot, facing, range_):
 
 
 DOOR_HOST = []      # the door_fx section's door_anim logger (the port's host op 210, combat.md "Doors")
+
+
+START_BLED = {}                    # turn_end: slot -> g_bled byte that the stubbed StartTurn? 0x11FB4 writes (its bleed)
 
 
 def port_world(name, args=(), sync=False):
@@ -1175,12 +1296,18 @@ def port_world(name, args=(), sync=False):
             r_ = eod_host(op, args_, bufs, scalars)
             if r_ is not None:
                 return r_, None
-        if op not in CALLEES:
+        if op in ("w_67c54", "mouse_release") and op not in CALLEES:   # TimeCompress(0)'s button-up waits
+            return 0, None                 # (#70 F18 fuses / end turn): the original side stubs 0x67C54 / 0x67C68
+        if op not in CALLEES:              # silently (platform code)
             raise SystemExit(f"port called unknown host op {op} {args_}")
         if op == "merc_text":              # the port passes a text number (port_api.md, op 57)
             args_ = [args_[0], MERC_TEXTS.get(args_[1], f"text {args_[1]}")] + list(args_[2:])
         log.append((op, conv(CALLEES[op][1].replace("s", "i"), args_)))
         v_ = take(op)
+        if op == "w_11fb4" and args_[0] in START_BLED:   # turn_end: the stub's bleed mark, into the port world
+            port_lib.world_store(e, ai, bufs, scalars)
+            e.w8(rt(ai.G_BLED) + e.r8(rt(G_SOLDIERS) + 0x200 * args_[0] + 0x17A), START_BLED[args_[0]])
+            port_lib.world_load(e, ai, bufs, scalars)
         if op == "noise_tile" and isinstance(v_, tuple):   # (tile, loudness): the loudness through the out record
             return v_[0], struct.pack("<I", v_[1] & 0xFFFFFFFF)
         return v_, None
@@ -1253,6 +1380,9 @@ DISARM_TEXTS = ["Attempt to disarm explosive?", "Remove blue flag?"]   # op 345 
 PICK_EMPTIES = [False]       # --port pickup "pick": op 344 cursor_to_soldier empties the cursor (as the original's stub)
 
 
+PORT_OP_HOOK = {}                      # port_sector: op name -> fn(args, bufs, scalars) -> result
+
+
 def port_sector(name, args, host_ops=None, allow=()):
     """--port: one sector start entry point (port_lib.SECTOR_ENTRY) on the world from emulator memory, written back.
     host_ops: default ALL_OPS (port_lib.SECTOR_LIB_OPS = the library runs replace + reserve_ap itself)"""
@@ -1269,6 +1399,8 @@ def port_sector(name, args, host_ops=None, allow=()):
 
     def call(op, args_):
         args_ = [a & 0xFFFFFFFF for a in args_]
+        if op in PORT_OP_HOOK:             # a section's own handler (effect_pass: effect_hit, tile_anim)
+            return PORT_OP_HOOK[op](args_, bufs, scalars), None
         if op == "div_zero":               # the original crashes here (port_api.md, Division by zero)
             raise ZeroDivisionError
         if op == "open_cd":                # op 86 open_patch(kind, number, count): the path the original opens
@@ -1614,6 +1746,8 @@ for i in range(n_dec if names else 0):
         for st in ai.DIR_STEP_1 + (0,):
             if 0 <= tile + st < 3136:
                 e.w16(rt(ai.G_MOVECODE) + 2 * (tile + st), rng.choice(MOVE_CODES))
+        if 0 <= tile < 3136:
+            f68_bridges(tile)
     ai.w16(s, 0x114, tile)
     e.uc.mem_write(sp, bytes(s))
     e.w8(rt(G_TILEMAP) + 8 * tile + 5, rng.choice([0x40, 0xC0, 0x80 | slot, slot]))
@@ -1705,6 +1839,10 @@ for i in range(n_dec if names else 0):
             o = rng.choice(list(range(0x28)) if slot >= 0x28 else list(range(0x28, 0x30)))
             ot = e.r16(rt(G_SOLDIERS) + 0x200 * o + 0x114)
             ai.w16(s, 0xD0, (ot + rng.choice([0, 0, 1, -1, 2, 56, -56, 57, 112, 58])) % 3136)
+            e.uc.mem_write(sp, bytes(s))
+        if name == "throw_option" and FAN and 58 in FAN and F58_RNG.random() < 0.6:
+            f58_edge(s, slot, base)
+            script = {k: list(v) for k, v in base.items()}
             e.uc.mem_write(sp, bytes(s))
         e.uc.mem_write(OUTREC, bytes(rng.randrange(256) for _ in range(10)))
         edx = OUTREC
@@ -1909,6 +2047,27 @@ for i in range(n_dec if names else 0):
                 for o_ in (0x1D5, 0x1C4):
                     e.w8(rt(G_SOLDIERS) + 0x200 * k_ + o_, 0)
             s[0x1D5] = s[0x1C4] = 0           # (the port reads the own record from s)
+            if FAN and 39 in FAN:             # #70 F39: then only the duty byte +0x17E decides MercBusy? (1.15m)
+                k39 = F39_RNG.choice([None, None] + list(range(8)))
+                for k_ in range(8):
+                    a_ = rt(G_SOLDIERS) + 0x200 * k_
+                    e.w8(a_ + 0x17E, 0 if k_ != k39 else F39_RNG.choice([8, 3, 1, 0xFF]))
+                    if k_ == k39:
+                        e.w8(a_ + 0x182, F39_RNG.choice([1, 1, 0]))
+                        e.w8(a_ + 0x138, 1)
+                if slot < 8:
+                    s[0x17E], s[0x182], s[0x138] = (e.r8(rt(G_SOLDIERS) + 0x200 * slot + o_) for o_ in (0x17E, 0x182, 0x138))
+                if F39_RNG.random() < 0.8:    # step 11 asks MercBusy? only in the story sector (story 0x17, 0x16 = 0)
+                    e.w8(rt(0x22A057), e.r8(rt(ai.G_CUR_SECTOR)))
+                    e.w8(rt(0x22A056), 0)
+                    s[0x183] = max(s[0x183], F39_RNG.choice([15, 40]))
+                    mt_ = ai.u16(s, 0x114) % 3136     # the view's tiles not seen yet (byte 4 bit 0x80), so the
+                    for dy_ in range(-8, 9):           # step shows on the map
+                        for dx_ in range(-8, 9):
+                            t_ = mt_ + dy_ * 56 + dx_
+                            if 0 <= t_ < 3136:
+                                a_ = rt(G_TILEMAP) + 8 * t_ + 4
+                                e.w8(a_, e.r8(a_) & 0x7F)
             e.uc.mem_write(sp, bytes(s))
         gsave = [bytes(e.uc.mem_read(rt(a), k)) for a, k in GLOBALS_W]
     if name in ("aid_tick", "apply_aid"):   # a medic (mostly a merc) bandaging a patient on its partner tile
@@ -2211,6 +2370,8 @@ for i in range(n_dec if names else 0):
             e.w16(r_ + 6, rng.choice([edx, ai.NO_TILE, rng.randrange(3136)]))
         for i_ in range(30):
             e.w16(rt(ai.G_BLAST_LIST) + 2 * i_, rng.choice([ai.NO_TILE, ai.NO_TILE, rng.randrange(3136)]))
+        if FAN and 55 in FAN and F55_RNG.random() < 0.5:   # F55: the used tile in the blast list (a known trap)
+            e.w16(rt(ai.G_BLAST_LIST) + 2 * F55_RNG.randrange(30), edx & 0xFFFF)
         e.w8(rt(ai.G_TILESET), rng.randrange(10))
         cs_ = rng.choice([0xB, 0xB, rng.randrange(0x40)])
         e.w8(rt(ai.G_CUR_SECTOR), cs_ if cs_ < 60 or not PORT else 0xB)   # --port: the world's sector states are 60
@@ -2571,6 +2732,8 @@ for i in range(n_dec if names else 0):
         e.w8(rt(G_TILEMAP) + 8 * tile + 5, occ | rng.choice([0, 0, 0x80]))
         e.w8(rt(G_TILEMAP) + 8 * tile + 1, rng.choice([0xAE, 0, 0x30, rng.randrange(256)]))
         ai.w16(s, 0xDC, tile)
+        if FAN and 59 in FAN and F59_RNG.random() < 0.25:   # #70 F59: 1.15m refuses a target tile >= 0xC40
+            ai.w16(s, 0xDC, F59_RNG.choice([0xC40, 0xC41, 0xC7F]))
         s[0] = rng.choice([0xF, 0x10, 0x10, 0, 3, rng.randrange(1, 0x11) if PORT else rng.randrange(136)])   # (--port: attack_sound has weapon classes 0..4)
         if PORT and MELEE_HI.random() < 0.3:
             # made cases (own stream, the old cases stay): a hand item id above 43; MeleeHit? 0x3521C reads byte 5 (damage)
@@ -2580,6 +2743,7 @@ for i in range(n_dec if names else 0):
         s[0x1FD] = rng.choice([0, 1, 2, 4, 0xFF])
         s[0x192] = rng.choice([0, 1, 3, 10, 0x80, 0x7F, 0x60])
         s[0x1BE] = rng.choice([0, 1, 5])
+        s[0x1A6] = F33_RNG.choice([0, 0, 0xF, 0x10, 0x45, 7])   # (#70 F33: the end clears it)
         s[0x185] = rng.choice([0, 0, 3, 20, 0x90, rng.randrange(256)])   # (wound part of the hp term: (b184 - b183 - b185) & 0xFF)
         if occ < 0x30 and occ != slot:
             a_ = rt(G_SOLDIERS) + 0x200 * occ
@@ -2805,6 +2969,8 @@ for i in range(n_dec if names else 0):
         s[0x00] = rng.choice(list(range(0x12)) + [0x80, 0x90, rng.randrange(136)])
         s[0x01] = rng.choice([0, 1, 3])
         s[0x02] = rng.choice([10, 15, 16, 30, 49, 50, 80, 0x90])
+        if FAN and 37 in FAN:              # F37: the 1.15m floor is condition > 9; 10..15 can jam
+            s[0x02] = rng.choice([8, 9, 10, 11, 12, 15, 16, s[0x02]])
         s[0x1F3] = rng.choice([0, 1, 2])
         ai.w16(s, 0x1E8 + 2 * s[0x1F3], rng.choice([4, 0x1A, 0x1C, 0x1D, 0x1E, 0x20, 0x21, 0x22, 0x24, 0x25, 0x1B, 0x0A]))
         s[0x1B2] = rng.choice([0x10, 0x10, 0x6C])
@@ -2822,6 +2988,8 @@ for i in range(n_dec if names else 0):
                 e.w8(rt(ai.G_GROUND_ITEMS) + 12 * ecx_arg, rng.choice([0x72, 0x72, 1]))
                 e.w8(rt(ai.G_GROUND_ITEMS) + 12 * ecx_arg + 6, rng.choice([0, 0, 1]))
             stack_arg = rng.choice([0, 0xFE, 0xFF, 0x76, 0x96, 0x93, 0x9B, 0x9D, 0x9E, 0x92, rng.randrange(256)])
+            if FAN and 57 in FAN:          # F57: the 1.15m kind table (0x9F/0x97 +10, 0xA3 +8, 0x98 +3, 0x76 none)
+                stack_arg = rng.choice([stack_arg, 0x9F, 0x97, 0xA3, 0x98, 0x76, 0])
             s[:] = e.uc.mem_read(sp, 0x200)
         gsave = [bytes(e.uc.mem_read(rt(a), k)) for a, k in GLOBALS_W]
     if name in ("stop_anim", "w_197d8", "stop_walk"):
@@ -3071,6 +3239,11 @@ for i in range(n_dec if names else 0):
             s[0x17A] = slot = rng.choice([7, 8, 9])
             sp = rt(G_SOLDIERS) + slot * 0x200
             e.w8(rt(ai.G_SELECTED), slot)
+        if FAN and 48 in FAN:            # F48: the backward-walk byte +0x196 and odd facings (own random source)
+            r48_ = random.Random(104729 * i + 48)
+            s[0x196] = r48_.choice([0, 0, 1, 0xFF, r48_.randrange(256)])
+            if r48_.random() < 0.2:
+                s[0x1A2] = r48_.choice([0x80, 0x84, 0x7F, 9, 12, r48_.randrange(256)])
         e.uc.mem_write(sp, bytes(s))
         e.w8(rt(ai.ANIM_STILL) + 8 * (an & 0xFF), rng.choice([0, 0, 1]))
         for t_ in range(max(0, me - 57), min(3136, me + 58)):
@@ -3248,6 +3421,21 @@ for i in range(n_dec if names else 0):
             e.w8(rt(ai.G_AP_WARNED) + (slot & 7), rng.choice([0, 1]))
             for a_ in (0x92DDF, 0x92DCF, 0x92DD0, 0x92DCB, 0x22A0FF, 0x1163C1):
                 e.w8(rt(a_), rng.choice([0, 0, 1]))
+            if FAN and 25 in FAN and slot < 8 and F24_RNG.random() < 0.3:   # F25: the step tile's mine in the blast list
+                me_ = ai.u16(s, 0x114)                                        # or not (any next tile: all 8 neighbours)
+                for d_ in (-57, -56, -55, -1, 1, 55, 56, 57):
+                    if 0 <= me_ + d_ < 3136:
+                        e.w16(rt(ai.G_BLAST_LIST) + 2 * F24_RNG.randrange(30), me_ + d_)
+            if FAN and 24 in FAN and slot < 8 and s[0x16B] == 1 and F24_RNG.random() < 0.7:   # F24 (StepStart 0x1A587
+                e.w8(sp + 0xEF, min(s[0x1A5] + F24_RNG.choice([1, 2, 5, 20]), 255))   # signed): AP under the reserve in combat
+                e.w8(rt(ai.G_AP_WARNED) + slot, 0)                           # (own stream: the plain cases stay)
+                e.w8(rt(0x92DCB), 1)
+            if FAN and 61 in FAN and slot < 8 and F61_RNG.random() < 0.5:   # F61 (StepStart 0x1A650): the step fits in
+                a_ = F61_RNG.choice([4, 6, 10, 20, 40])                      # the AP but not over the reserve, so the
+                s[0x16B], s[0x1A5], s[0xEF] = 1, a_, a_ - F61_RNG.choice([0, 1, 2, 3])   # low-AP stop selects the
+                e.uc.mem_write(sp, bytes(s))                                # merc (own stream)
+                e.w8(rt(ai.G_AP_WARNED) + slot, 0)
+                e.w8(rt(0x92DCB), 1)
             e.w32(rt(0x229DD8), rng.choice([0, 1, 0x100, 0x1000000]))
             sec_ = ai.G_SECTORS + 0x58 + 0xB1 * e.r8(rt(ai.G_CUR_SECTOR))
             for k_ in range(10):         # sector tile triggers on the soldier's tile
@@ -3391,11 +3579,16 @@ for i in range(n_dec if names else 0):
         e.uc.mem_write(rt(ai.G_MOVECODE), FP_MAP[0][0])
         e.uc.mem_write(rt(G_TILEMAP), FP_MAP[0][1])
         e.w8(rt(G_TILEMAP) + 8 * me_ + 5, slot)
+        if FAN and 47 in FAN:                 # F47: the visible byte +0x9C of every soldier (own random source)
+            r47_ = random.Random(7919 * FP_N[0] + 47)
+            for k_ in (k_ for k_ in range(0x30) if k_ != slot):     # the own record is the case's record s
+                e.w8(rt(G_SOLDIERS) + k_ * 0x200 + 0x9C, r47_.choice([0, 0, 1, 2, 0xFF, r47_.randrange(256)]))
         for _ in range(rng.choice([0, 5, 40])):        # some move codes and occupants changed near the walk
             t_ = rng.randrange(3136) if rng.random() < 0.5 else min(3135, max(0, me_ + rng.randrange(-200, 200)))
             e.w16(rt(ai.G_MOVECODE) + 2 * t_, rng.choice([1000, 1200, 1201, 1500, 3600, 5000, 0x6338, 0x62D4, 0x639C,
                                                          25300, 25500, 2000]))
             e.w8(rt(G_TILEMAP) + 8 * t_ + 5, rng.choice([0x40, rng.randrange(0x30), 0xC0]))
+        f68_bridges(me_, F68_RNG.choice([0, 20, 80]) if FAN and 68 in FAN else 0)
         if name == "path_ap":                # the path marks: own random source, undone after the case (MARK_PRE)
             MARK_PRE[0] = [bytes(e.uc.mem_read(rt(a), k__)) for a, k__ in MARK_REGS]
             r2_ = random.Random(1000003 * i + 17)
@@ -3787,6 +3980,8 @@ for i in range(n_dec if names else 0):
         osave = bytes(e.uc.mem_read(rt(G_SOLDIERS), 0x6000))
     if name in PATHCMP:
         psave_ = bytes(e.uc.mem_read(rt(ai.G_PATHS), 0x50 * 0x30))
+    if name == "think":                  # turn-based flag 0x92DAC: compared for think only (F36 clears it after FireNow)
+        tbsave_ = bytes(e.uc.mem_read(rt(ai.G_TURN_BASED), 4))
     if name in MARKCMP:
         ksave_ = [bytes(e.uc.mem_read(rt(a), k)) for a, k in MARK_REGS]
     if name in ("kill", "land_item"):     # #12: a tile byte 6 of 200..254 (Put item into a full table, an earlier case)
@@ -3798,6 +3993,9 @@ for i in range(n_dec if names else 0):
                         e.w8(rt(G_TILEMAP + 8 * t_ + 6), 0xFF)
     if name in MAPCMP:
         msave = bytes(e.uc.mem_read(rt(map_lo(name)), MAP_HI - map_lo(name)))
+    mc_cmp = name in MCCMP and FAN and 51 in FAN   # #70 F51: the move codes after a blue flag is cleared
+    if mc_cmp:
+        mcsave = bytes(e.uc.mem_read(rt(ai.G_MOVECODE), 2 * 3136))
     if name == "soldier_power":
         edx = rng.choice([ai.NO_TILE, ai.u16(s, 0xD0), rng.randrange(3136), rng.randrange(1 << 32)])
     if PORT and name in ("active_frame", "soldier_frame"):     # the port's item_types has the game's 136 entries
@@ -3855,6 +4053,9 @@ for i in range(n_dec if names else 0):
         got_o = bytes(e.uc.mem_read(edx, 0x200))
     if name in OTHERS:
         got_o = bytes(e.uc.mem_read(rt(G_SOLDIERS), 0x6000))
+    if mc_cmp:
+        got_mc = bytes(e.uc.mem_read(rt(ai.G_MOVECODE), 2 * 3136))
+        e.uc.mem_write(rt(ai.G_MOVECODE), mcsave)
     if name in MAPCMP:                    # then restore, the records last
         e.uc.mem_write(rt(map_lo(name)), msave)
     if name in PAIR:
@@ -3873,6 +4074,9 @@ for i in range(n_dec if names else 0):
     if name in PATHCMP:                  # the stored paths: compared for these deciders only
         got_g.append(bytes(e.uc.mem_read(rt(ai.G_PATHS), 0x50 * 0x30)))
         e.uc.mem_write(rt(ai.G_PATHS), psave_)
+    if name == "think":
+        got_g.append(bytes(e.uc.mem_read(rt(ai.G_TURN_BASED), 4)))
+        e.uc.mem_write(rt(ai.G_TURN_BASED), tbsave_)
     if name in MARKCMP:
         got_g += marks_read()
         for (a, k), b in zip(MARK_REGS, ksave_):
@@ -3905,6 +4109,9 @@ for i in range(n_dec if names else 0):
     if name in PATHCMP:
         want_g.append(bytes(e.uc.mem_read(rt(ai.G_PATHS), 0x50 * 0x30)))
         e.uc.mem_write(rt(ai.G_PATHS), psave_)
+    if name == "think":
+        want_g.append(bytes(e.uc.mem_read(rt(ai.G_TURN_BASED), 4)))
+        e.uc.mem_write(rt(ai.G_TURN_BASED), tbsave_)
     if name in MARKCMP:
         want_g += marks_read()
         for (a, k), b in zip(MARK_REGS, MARK_PRE[0]):     # (the state before the marks fuzz: later cases unchanged)
@@ -3913,6 +4120,10 @@ for i in range(n_dec if names else 0):
         want_o = bytes(e.uc.mem_read(edx, 0x200))
         got_g.append(got_o)
         want_g.append(want_o)
+    if mc_cmp:
+        got_g.append(got_mc)
+        want_g.append(bytes(e.uc.mem_read(rt(ai.G_MOVECODE), 2 * 3136)))
+        e.uc.mem_write(rt(ai.G_MOVECODE), mcsave)
     if name in MAPCMP:
         # kill, land_item: Put item with no free tile (dest NONE) writes byte 6 past the map in the original (sector_start.md
         # batch 3 step 7: nothing to do in the port): the bytes past the map are not compared
@@ -3924,6 +4135,9 @@ for i in range(n_dec if names else 0):
         cut = lambda b: b[:0x200 * slot] + b[0x200 * slot + 0x200:]
         got_g.append(cut(got_o))
         want_g.append(cut(want_o))
+    if name == "land_item" and FAN and 52 in FAN and got == sp & 0xFFFF and want == edx:
+        got = want                       # F52: an item PutItem does not place (sinks in water) leaves 1.15m's EAX = the
+                                         # caller's EDI (the thrower pointer); the port keeps the asked tile (1.13b)
     counts[name] = counts.get(name, 0) + 1
     key = want[0] if name in RECORDS and not isinstance(want, str) else want
     results.setdefault(name, {}).setdefault(key, 0)
@@ -4715,7 +4929,7 @@ if direct("pay"):   # morning pay: PayMercs? 0x44740 and its parts (money carrie
         return v_
     e.stub(rt(0x51CB0), stash_put_, 0)
     REG = [(G_SOLDIERS, 0x200 * 8), (ai.G_PROFILES, 64 * ai.PROFILE_SIZE), (ai.G_STASH_COUNTS, 136),
-           (ai.G_STAT_PROGRESS, 8 * 0x12), (0x229FA0, 0xA8), (0x92F8B, 1)]
+           (ai.G_STAT_PROGRESS, 8 * 0x12), (0x229FA0, 0xA8), (0x92F8B, 1), (ai.G_PREV_BALANCE, 4)]
     tsave = [bytes(e.uc.mem_read(rt(a_), k_)) for a_, k_ in REG]
     prng = random.Random(int(os.environ.get("AI_DIFF_SEED", "6")) * 7919 + 5)   # own sequence: later sections keep theirs
     listed_ = [e.r8(rt(ai.G_LISTED_ITEMS) + j_) for j_ in range(32)]
@@ -5333,7 +5547,8 @@ if direct("disarm"):   # DisarmExplosivePrompt 0x3B9D8: spot, ask, disarm or set
         e.uc.mem_write(rt(a_), b_)
 if direct("mine_spotted"):   # MineSpotted? 0x3C31C (soldier, tile, ground entry): called directly with the stub lifted
     ms_stub = e.stubs.pop(rt(0x3C31C), None)
-    REG = [(ai.G_GROUND_ITEMS, 12 * 200), (ai.G_BLAST_LIST, 60)]
+    F56 = bool(FAN and 56 in FAN)
+    REG = [(ai.G_GROUND_ITEMS, 12 * 200), (ai.G_BLAST_LIST, 60)] + ([(ai.G_FX, 0x41)] if F56 else [])
     tsave = [bytes(e.uc.mem_read(rt(a_), k_)) for a_, k_ in REG]
     for i in range(n // 6):
         slot = rng.choice([rng.randrange(8), rng.randrange(8), rng.randrange(8, 0x30)])
@@ -5349,6 +5564,13 @@ if direct("mine_spotted"):   # MineSpotted? 0x3C31C (soldier, tile, ground entry
         e.w8(g_ + 2, rng.choice([1, 1, 50, 0x7F, 0x7F, 0, 0x80, 0xFF, rng.randrange(256)]))
         for j_ in range(30):
             e.w16(rt(ai.G_BLAST_LIST) + 2 * j_, rng.choice([ai.NO_TILE, ai.NO_TILE, rng.randrange(3136), tile]))
+        if F56:                          # F56: explosive types answer -FxHere?(soldier): an effect on the own tile
+            e.w8(g_, F56_RNG.choice([0x11, 0x16, 0x18, 0x1A, 0x1C, 0x1D, 0x17, 0x1E, 0x15, e.r8(g_)]))
+            if F56_RNG.random() < 0.6:
+                e.w32(rt(ai.G_FX), F56_RNG.choice([0, 5, 0xFFFFFFFF]))
+                e.w16(rt(ai.G_FX) + 6, e.r16(sp + 0x114))
+            if F56_RNG.random() < 0.15:
+                k = 0xFF                 # (1.15m: ground entry 0xFF answers 0; the entry is not written)
         snap = [bytes(e.uc.mem_read(rt(a_), k_)) for a_, k_ in REG]
         script = {}
         log.clear()
@@ -5417,6 +5639,8 @@ if direct("merc_entry"):   # 0x2B470 mercs onto the entry tile and around it (se
                 s_[o_] = rng.randrange(256)
             e.uc.mem_write(sp_, bytes(s_))
         facing_ = rng.choice(list(range(1, 9)) + [0, 0x80])
+        if FAN and 35 in FAN and facing_ == 0x80:   # F35 rings start at the facing; 0x80 would read past the direction
+            facing_ = 8                             # table in the original (callers give 1..8; 9..16 wraps to 9 at +5)
         snap = [bytes(e.uc.mem_read(rt(a_), k_)) for a_, k_ in REG]
         base_ = {"Random": [rng.randrange(0x7FFF) for _ in range(16)], "replace": [0] * 32, "reserve_ap": [0] * 2}
         script = {k_: list(v_) for k_, v_ in base_.items()}
@@ -5652,6 +5876,8 @@ if direct("sector_start"):   # SetupSectorFromXra 0x2E918 (whole sector start, X
             cur_ = e.r8(rt(ai.G_PLANTS) + 4 + 12 * rng.randrange(1, 4))
             cur_ = cur_ if cur_ < 59 else rng.randrange(59)
             plant_fuzz_(cur_)
+        if PFIX and 16 in PFIX and rng.random() < 0.5:   # P16: sector 26 holds the broken charge (#2 row 36)
+            cur_ = 26
         e.w8(rt(ai.G_CUR_SECTOR), cur_)
         if rng.random() < 0.5 and cur_ < 59:     # stacked ground items in the XRA record (the CD's rarely stack)
             b_ = bytearray(xra0_)
@@ -5730,6 +5956,8 @@ if direct("sector_start"):   # SetupSectorFromXra 0x2E918 (whole sector start, X
                  "quest_check": [rng.choice([0, 1, 0x100])], "shot_ap": [rng.choice([1, 4, 5, 0xFF])] * 4,
                  "tile_dist": [rng.choice([0, 1, 2, 5])] * 4, "reach_ap": [rng.choice([0, 1])] * 4,
                  "path_ap": [rng.choice([0, 3, 0xFE])] * 4, "direction": [rng.randrange(1, 9)] * 4})
+        if PFIX and 16 in PFIX and cur_ == 26 and rng.random() < 0.8:   # P16: no sec26.tmp, the XRA items load
+            base_["fopen"] = [0]
         script = {k_: list(v_) for k_, v_ in base_.items()}
         log.clear()
         e.call(rt(0x2E918), entry_, facing_)
@@ -7247,7 +7475,7 @@ if direct("loop_rest", "fuses", "loop_head"):   # TacticalLoop after the soldier
     REG = [(ai.G_SECTOR_TBL9, 9 * 80), (0x93449, 1), (0x22A0CF, 1), (0x284F00, 0x30), (0x93AAA, 2), (0x229D28, 0x28),
            (0x92EF8, 4), (0x229AFC, 4), (ai.G_TILE_ANIMS, 0xB * 10), (G_TILEMAP, 8 * 3136), (ai.G_FX, 65),
            (ai.G_GROUND_ITEMS, 12 * 200), (0x92D80, 0x100), (0x229C80, 0xA8), (0x22A400, 0x88), (0x22A0C0, 0x20),
-           (G_SOLDIERS, 0x200 * 0x30)]
+           (G_SOLDIERS, 0x200 * 0x30), (0x9300C, 1), (0x92F60, 4)]   # (time compression + tick step: #70 F18)
     tsave = [bytes(e.uc.mem_read(rt(a_), k_)) for a_, k_ in REG]
     gl_ = [(a_, e.r8(rt(a_))) for a_ in [ai.G_CUR_SECTOR, 0x1163C0, 0x9300C] + [ai.G_SPLASH + k_ for k_ in range(60)]]
     msave_ = [bytes(e.uc.mem_read(rt(G_SOLDIERS) + 0x200 * k_ + 0x138, 0x50)) for k_ in range(8)]
@@ -7284,6 +7512,7 @@ if direct("loop_rest", "fuses", "loop_head"):   # TacticalLoop after the soldier
             e.w8(rt(0x284F14), rr.choice([0, 1]))
             e.w8(rt(0x1163C0), rr.choice([0, 1, 1]))
             e.w8(rt(0x9300C), rr.choice([0, 0, 1]))
+            e.w32(rt(0x92F60), 1000 if e.r8(rt(0x9300C)) else 10)   # the tick step TimeCompress sets
             e.w8(rt(ai.G_SPLASH + sec), rr.choice([0, 1, 1, 3, 10, 0x7F, 0xFF, 0x80]))
             for k_ in range(10):                         # tile animations: some free
                 a_ = rt(ai.G_TILE_ANIMS) + 0xB * k_
@@ -7637,6 +7866,10 @@ if direct("put_item"):   # stack-argument item drop: called directly with the st
     stub2_ = e.stubs.pop(rt(0x3FC04)) if PORT else None    # port: no host call, the listed-type test has no effect
     # (port: the 3136 map tiles only; with no tile found the original also writes byte 6 of tile 0xC41)
     area = [(G_TILEMAP, 8 * (3136 if PORT else 3138)), (ai.G_GROUND_ITEMS, 12 * 200), (ai.G_NOTES_FOUND, 30)]
+    F50 = bool(FAN and 50 in FAN)       # #70 F50: the swap keeps the old item under a timed effect, moves its blast mark
+    if F50:
+        area += [(ai.G_BLAST_LIST, 60), (ai.G_FX, 65)]
+        F50_RNG = random.Random(5050)    # own random source: the plain case stream stays
     save = [bytes(e.uc.mem_read(rt(a), k)) for a, k in area]
     notes = [e.r8(rt(ai.G_NOTES_FOUND) + 2 * k) for k in range(15)]
     for i in range(4000):
@@ -7673,6 +7906,15 @@ if direct("put_item"):   # stack-argument item drop: called directly with the st
                 e.w8(rt(ai.G_GROUND_ITEMS) + 12 * k + 6, rng.choice([0xFF, 0xFF, 0, 1]))
         for k in range(15):
             e.w8(rt(ai.G_NOTES_FOUND) + 2 * k + 1, rng.choice([0, 1, 2]))
+        if F50:                                 # the asked tile in the blast list and / or a timed effect record
+            for k in range(30):
+                e.w16(rt(ai.G_BLAST_LIST) + 2 * k, F50_RNG.choice([0xC41, 0xC41, tile, tile + 1, F50_RNG.randrange(3136)]))
+            for k in range(5):
+                e.w16(rt(ai.G_FX) + 13 * k + 6, F50_RNG.choice([0xC41, 0xC41, 0xC41, tile, F50_RNG.randrange(3136)]))
+            if F50_RNG.random() < 0.5:          # an old item that must move aside (+6 != -1) on the asked tile
+                g_ = F50_RNG.randrange(200)
+                e.w8(rt(G_TILEMAP) + 8 * tile + 6, g_)
+                e.w8(rt(ai.G_GROUND_ITEMS) + 12 * g_ + 6, F50_RNG.choice([0, 1, 0xFF]))
         typ = rng.choice([0, rng.randrange(1, 136), rng.randrange(1, 136), rng.choice(notes), 0x16, 0x5D])
         if PORT and typ == 135:        # its sink flag lies past the port's item_types (sector_start.md batch 3)
             typ = 134
@@ -7737,6 +7979,7 @@ if direct("effect_hit"):   # explosion effect step: no soldier record, called di
         e.w8(rt(ai.G_BLASTER), rng.choice([rng.randrange(8), 0x40]))
         kind = rng.choice([2, 2, 3, 3, 3, 4, 5, 6, 7, 8, 9, 0x63, 0x102])
         power = rng.choice([0, 1, 5, 0x7F, 0x80, 0xFF, 0x105])
+        f68_bridges(tile)
         base = {"Random": [rng.choice([0, 1, 7, 25, 50, 999, 2000, rng.randrange(1 << 15)]) for _ in range(400)],
                 "direction": [rng.choice([1, 4, 8])] * 200, "take_damage": [0] * 200, "rest": [0] * 200,
                 "item_panel": [0] * 200, "w_17b70": [0] * 200, "w_74304": [0] * 200, "stat_practice": [0] * 200,
@@ -7784,12 +8027,142 @@ if direct("effect_hit"):   # explosion effect step: no soldier record, called di
     e.uc.mem_write(rt(G_TILEMAP), tmap)
     e.uc.mem_write(rt(G_SOLDIERS), soldiers)
     blast_restore(real_)
+
+
+EP_RNG = random.Random(3030)   # effect_pass: own stream
+EPN_RNG = random.Random(3031)  # effect_pass: the nested-pass script (own stream: the case stream stays)
+if PORT and direct("effect_pass"):   # (--port only) DrawProjectilePass? 0x17548 (the effect records 1..15; #70 row 30 / F69): hit, flag, fire
+    FX_ = 0xEAFF0                       # record 0 (the pass starts at record 1, 0xEB002)
+    sv_ = {a_: e.stubs.get(rt(a_)) for a_ in (0x1698C, 0x153C8, 0x173B4, 0x52DC8, 0x2406D)}
+    # The overview copy (OverviewRedraw 0x23F63..0x2406D, view mode 0): one record per run, ESI = record, EBP = k;
+    # limit 0x16 and no fire sound (0x24068 StartTileAnim only). The stub at 0x2406D (the loop's next record) returns.
+    ep_cell_, ep_tramp_ = e.alloc(16), e.alloc(32)
+    e.uc.mem_write(ep_tramp_, b"\x8B\x35" + struct.pack("<I", ep_cell_) + b"\x8B\x2D" + struct.pack("<I", ep_cell_ + 4)
+                   + b"\x83\xEC\x20\xE9" + struct.pack("<i", rt(0x23F63) - (ep_tramp_ + 20)))
+
+    def ep_flags(rd):
+        return tuple(rd(FX_ + 0x12 * k_ + 0x10) for k_ in range(1, 16))
+
+    # Nested pass (#70 row 30): a merc killed inside EffectHit? runs MercDies? -> TacticalRedraw(1) -> this pass again
+    # before the outer pass sets the record's flag (1.13b; F69 sets it first). ep_nest = per case, one entry per hit:
+    # 1 = this hit kills a merc. Original: EffectHit? 0x173B4 -> `call LOG; test eax,eax; jz; call 0x17548; ret`
+    # (0x17548 = what TacticalRedraw runs; the real death path is in the merc_dies decider + live c13315).
+    # Port: the hit handler runs the library pass again on the same buffers (merc_dies' op 358 EFFECT_PASS 0x13).
+    ep_nest = []
+    ep_log_ = e.alloc(b"\xC3" * 16)
+    ep_code_ = e.alloc(16)
+    e.uc.mem_write(ep_code_, b"\xE8" + struct.pack("<i", ep_log_ - (ep_code_ + 5)) + b"\x85\xC0\x74\x05\xE8"
+                   + struct.pack("<i", rt(0x17548) - (ep_code_ + 14)) + b"\xC3")
+    ep_old_ = bytes(e.uc.mem_read(rt(0x173B4), 5))
+
+    def ep_hit(emu, eax, edx, ebx, ecx):    # EffectHit? as logged: tile, kind, power + every record's hit flag now
+        log.append(("effect_hit", (ai.s16(eax), ai._i32(edx), ai._i32(ebx), ep_flags(lambda a_: e.r8(rt(a_))))))
+        return ep_nest.pop(0) if ep_nest else 0
+
+    def ep_hit_port(args_, bufs_, scalars_):
+        fx_ = bufs_["fx_anims"]
+        log.append(("effect_hit", (ai.s16(args_[0]), ai._i32(args_[1]), ai._i32(args_[2]),
+                                   ep_flags(lambda a_: fx_[a_ - FX_]))))
+        if ep_nest and ep_nest.pop(0):
+
+            def call_(op, a_):
+                a_ = [x_ & 0xFFFFFFFF for x_ in a_]
+                if op in PORT_OP_HOOK:
+                    return PORT_OP_HOOK[op](a_, bufs_, scalars_), None
+                if op != "sfx":
+                    raise SystemExit(f"port called host op {op} {a_} in the nested effect pass")
+                log.append((op, conv(CALLEES[op][1].replace("s", "i").replace("x", ""), a_)))
+                return take(op), None
+            port_lib.sector_run("effect_pass", bufs_, scalars_, (0x13,), lambda n_: 0, call_)
+        return 0
+
+    def ep_anim_port(args_, bufs_, scalars_):    # op 205 kind 1: the front-end's StartTileAnim (fire table, 0x2B)
+        port_lib.world_store(e, ai, bufs_, scalars_)
+        ai.start_tile_anim(World(0), ai.s16(args_[0]), 0x9562E if args_[1] == 1 else 0x95659, 0x2B if args_[1] == 1 else 0x12)
+        port_lib.world_load(e, ai, bufs_, scalars_)
+        return 0
+    e.stub(rt(0x1698C), lambda *a_: 0)      # the pictures (DrawSpriteAtWorld, DrawEffectFrame): front-end
+    e.stub(rt(0x153C8), lambda *a_: 0)
+    e.stub(rt(0x52DC8), lambda *a_: 0, 4)   # DrawCompiledSprite (overview kind-0 picture, y on the stack)
+    e.stub(rt(0x2406D), lambda emu_, *a_: emu_.w32(emu_.uc.reg_read(UC_X86_REG_ESP), emu.RET_SENTINEL))
+    e.stub(ep_log_, ep_hit)
+    e.stubs.pop(rt(0x173B4), None)          # (restored from sv_ at the end) the patched entry runs, not a stub
+    e.uc.mem_write(rt(0x173B4), b"\xE9" + struct.pack("<i", ep_code_ - (rt(0x173B4) + 5)))
+    e.uc.ctl_flush_tb()
+    PORT_OP_HOOK.update({"effect_hit": ep_hit_port, "tile_anim": ep_anim_port})
+    area = [(FX_, 16 * 0x12), (ai.G_TILE_ANIMS, 10 * 0xB), (G_TILEMAP, 8 * 3136)]
+    save = [bytes(e.uc.mem_read(rt(a_), k_)) for a_, k_ in area]
+    for i in range(6000):
+        for k_ in range(1, 16):
+            r_ = FX_ + 0x12 * k_
+            e.w8(rt(r_), EP_RNG.choice([0, 0, 1, 5, 5, 0x13, 0x14, 0x16, 0x17, 0x20, 0x7F, 0x80, 0xFF]))
+            e.w8(rt(r_ + 0xB), EP_RNG.choice([0, 2, 3, 3, 3, 4, 5, 0x80, 0xFF]))
+            e.w8(rt(r_ + 0x10), EP_RNG.choice([0, 0, 1, 2]))
+            e.w8(rt(r_ + 0x11), EP_RNG.choice([0, 1, 5, 0x7F, 0x80, 0xFF]))
+            e.w32(rt(r_ + 0xC), rt(0x91000))   # (kind 0: the picture's frame table, read by the draw)
+            t_ = EP_RNG.randrange(3136)
+            e.w16(rt(r_ + 9), t_)
+            e.w8(rt(G_TILEMAP) + 8 * t_ + 3, EP_RNG.choice([0, 0, 1, 7]))
+            e.w8(rt(G_TILEMAP) + 8 * t_, EP_RNG.choice([0x6B, 0x6C, 0x10, 0xFF, EP_RNG.randrange(256)]))
+        for k_ in range(10):                # tile animations: some free (count 0)
+            e.w8(rt(ai.G_TILE_ANIMS) + 0xB * k_, EP_RNG.choice([0, 0, 0, 3, 0x2A]))
+        snap = [bytes(e.uc.mem_read(rt(a_), k_)) for a_, k_ in area]
+        base = {"sfx": [0] * 40}
+        script = {k_: list(v) for k_, v in base.items()}
+        log.clear()
+        nest_ = [EPN_RNG.choice([0, 0, 0, 1]) for _ in range(6)] if EPN_RNG.random() < 0.5 else []
+        ep_nest[:] = nest_
+        ov_ = i % 3 == 2                    # every third case: the overview copy
+        if ov_:
+            for k_ in range(1, 16):
+                e.w32(ep_cell_, rt(FX_ + 0x12 * k_))
+                e.w32(ep_cell_ + 4, k_)
+                e.call(ep_tramp_)
+        else:
+            e.call(rt(0x17548))
+        got_log = list(log)
+        got = [bytes(e.uc.mem_read(rt(a_), k_)) for a_, k_ in area]
+        for (a_, k_), b_ in zip(area, snap):
+            e.uc.mem_write(rt(a_), b_)
+        script = {k_: list(v) for k_, v in base.items()}
+        log.clear()
+        nested_ = len(nest_) - len(ep_nest) > 0 and any(nest_[:len(nest_) - len(ep_nest)])
+        ep_nest[:] = nest_
+        if PORT:
+            port_sector("effect_pass", (0x16 if ov_ else 0x13,), allow=("sfx",))
+        else:
+            break
+        want = [bytes(e.uc.mem_read(rt(a_), k_)) for a_, k_ in area]
+        counts["effect_pass"] = counts.get("effect_pass", 0) + 1
+        n_ = sum(1 for c_ in got_log if c_[0] == "effect_hit")
+        fire_ = any(rd_ != sn_ for rd_, sn_ in zip(got[1], snap[1]))
+        key_ = ("ov " if ov_ else "") + f"hits {min(n_, 4)}" + (" fire" if fire_ else "") + (" nest" if nested_ else "")
+        results.setdefault("effect_pass", {}).setdefault(key_, 0)
+        results["effect_pass"][key_] += 1
+        if (got, got_log) != (want, log):
+            fails += 1
+            if fails <= 10:
+                print(f"MISMATCH effect_pass case {i}{' (overview)' if ov_ else ''}: areas {[n for n, (x, y) in enumerate(zip(got, want)) if x != y]}\n"
+                      f"  calls original {got_log[:8]}\n  calls port     {log[:8]}")
+        for (a_, k_), b_ in zip(area, snap):
+            e.uc.mem_write(rt(a_), b_)
+    for (a_, k_), b_ in zip(area, save):
+        e.uc.mem_write(rt(a_), b_)
+    for a_, v_ in sv_.items():
+        if v_ is None:
+            e.stubs.pop(rt(a_), None)
+        else:
+            e.stubs[rt(a_)] = v_
+    for k_ in ("effect_hit", "tile_anim"):
+        PORT_OP_HOOK.pop(k_, None)
+    e.uc.mem_write(rt(0x173B4), ep_old_)
+    e.uc.ctl_flush_tb()
 if direct("turn_flow"):   # interrupt queue pop, NextTurn?, InterruptTurn?: called directly
     soldiers = bytes(e.uc.mem_read(rt(G_SOLDIERS), 0x6000))
     area = [(ai.G_ITQ, 0x40), (ai.G_ITQ_N, 1), (0x92DD0, 3), (0x92DC7, 1), (ai.G_SELECTED, 1), (ai.G_SHOW_UI, 2),
-            (0x284F0F, 2), (0x92E38, 4), (0x22A484, 4), (0x229CB4, 4), (0x93D54, 4), (0x92DCE, 1), (0x92DD2, 1)]
+            (0x284F0F, 2), (0x92E38, 4), (0x22A484, 4), (0x229CB4, 4), (0x93D54, 4), (0x92DCE, 1), (0x92DD2, 1), (0x92DCA, 1)]
     save = [bytes(e.uc.mem_read(rt(a), k)) for a, k in area]
-    stubs_ = {a: e.stubs.pop(rt(a), None) for a in (0x12D58, 0x1304C)}
+    stubs_ = {a: e.stubs.pop(rt(a), None) for a in (0x12D58, 0x12D55, 0x1304C)}
     for i in range(4000):
         which = i % 3
         nq = rng.choice([0, 1, 2, 3, 5, 8])
@@ -7799,7 +8172,7 @@ if direct("turn_flow"):   # interrupt queue pop, NextTurn?, InterruptTurn?: call
             a_ = rt(G_SOLDIERS) + 0x200 * k
             e.w8(a_ + 0x182, rng.choice([1, 1, 0]))
             e.w8(a_ + 0x183, rng.choice([0, 14, 15, 40]))
-            e.w8(a_ + 0x1B0, rng.choice([0, 0, 1]))
+            e.w8(a_ + 0x1B0, rng.choice([0, 0, 1, 3]))
             e.w8(a_ + 0x17E, rng.choice([0, 8, 8, 3]))
             e.w8(a_ + 0x194, rng.choice([0, 2]))
         e.w32(rt(0x92E38), rng.choice([0, 0, 0, 1, 0xFFFFFFFF]))
@@ -7812,14 +8185,15 @@ if direct("turn_flow"):   # interrupt queue pop, NextTurn?, InterruptTurn?: call
         e.w16(rt(0x22A486), rng.choice([0, 20]))
         for k in range(8):
             e.w8(rt(G_SOLDIERS) + 0x200 * k + 0x138, rng.choice([1, 1, 0]))
-        e.w8(rt(0x92DD2), rng.choice([0, 3, 7, 8, 0x40]))
+        e.w8(rt(0x92DD2), rng.choice([0, 3, 7, 8, 0x40, 0xC0]))
+        e.w8(rt(0x92DCA), rng.choice([0, 2]))
         mode = rng.choice([0, 1, 1, 2, 0x101])
         base = {"w_32828": [rng.choice([0, 3, 0x2A])], "redraw": [0], "turn_banner": [0], "w_10398": [0],
-                "w_331a4": [0] * 16, "focus": [0], "w_1148c": [0], "w_67e30": [0]}
+                "w_331a4": [0] * 16, "focus": [0], "w_1148c": [0], "w_67e30": [0], "w_53660": [0, 0]}
         script = {k_: list(v) for k_, v in base.items()}
         snap = [bytes(e.uc.mem_read(rt(a), k)) for a, k in area] + [bytes(e.uc.mem_read(rt(G_SOLDIERS), 0x6000))]
         log.clear()
-        addr = (0x12C14, 0x12D58, 0x1304C)[which]
+        addr = (0x12C14, 0x12D55 if 29 in (FAN or ()) else 0x12D58, 0x1304C)[which]   # #70 F29: 1.15m callers enter at 0x12D55
         got_r = e.call(rt(addr), mode) & 0xFF
         got_log = list(log)
         got = [bytes(e.uc.mem_read(rt(a), k)) for a, k in area] + [bytes(e.uc.mem_read(rt(G_SOLDIERS), 0x6000))]
@@ -8168,6 +8542,7 @@ if PORT and direct("swap_places"):  # SwapPlaces 0x40568 (key X): called directl
             (ai.G_KNOWN, 0x30), (ai.G_REMEMBER_E, 0x1C0), (ai.G_BLED, 0x30), (G_SOLDIERS, 0x6000), (G_TILEMAP, 8 * 3136)]
     save = [bytes(e.uc.mem_read(rt(a), k)) for a, k in area]
     st_ = e.stubs.pop(rt(0x40568), None)
+    snap_ = e.stubs.pop(rt(0x197D8), None) if FAN and 13 in FAN else None   # F13: 1.15m PlaceAt calls SnapToTile
     base = {"enemy_turned": [0] * 8, "guard_turned": [0] * 16, "share_sightings": [0] * 16, "w_73d28": [0] * 64,
             "w_73f3c": [0] * 320, "next_turn": [0], "tile_dist": []}
     for i in range(max(n // 2, 600)):
@@ -8194,6 +8569,13 @@ if PORT and direct("swap_places"):  # SwapPlaces 0x40568 (key X): called directl
             e.w8(a_ + 0x177, rng.choice([0, 0, 1]))
             e.w8(a_ + 0x1B0, 0)
             e.w8(rt(G_TILEMAP) + 8 * tile_ + 5, rng.choice([k, k, k, k | 0x80, 0x40]))
+        if FAN and 68 in FAN:      # #70 F68: the two step tiles (StepApCost) are sometimes broken bridge pieces
+            for tile_ in (t, mt):
+                f68_bridges(tile_, F68_RNG.choice([0, 0, 2]))
+                if F68_RNG.random() < 0.6:
+                    e.w16(rt(ai.G_MOVECODE) + 2 * tile_, F68_RNG.choice([25300, 25300, 25400]))
+                    e.w8(rt(G_TILEMAP) + 8 * tile_, F68_RNG.choice([0x6C, 0x6C, 0x80, 0x6B, 0xFF]))
+                    e.w8(rt(G_TILEMAP) + 8 * tile_ + 1, F68_RNG.choice([0x21, 0, 0x1C, 0x1F]))
         e.w8(rt(0x92DCB), rng.choice([0, 1, 1]))
         e.w8(rt(0x92DD0), rng.choice([0, 0, 1]))
         e.w8(rt(ai.G_SELECTED), rng.choice([me, me, 0x40, 3]))
@@ -8229,6 +8611,8 @@ if PORT and direct("swap_places"):  # SwapPlaces 0x40568 (key X): called directl
         e.uc.mem_write(rt(a), b)
     if st_:
         e.stubs[rt(0x40568)] = st_
+    if snap_:
+        e.stubs[rt(0x197D8)] = snap_
 if PORT and direct("next_enemy"):  # NextEnemy 0x3F7C8 (Enter on the tactical screen, in a fight): called directly on a
     # merc's record; FocusOn and StatusMessage stubbed (the port's op 125 text 15 = "No enemies visible!")
     area = [(G_SOLDIERS, 0x6000), (0x92D80, 0x100), (0x92E00, 0x80), (0x93440, 0x20)]
@@ -8372,13 +8756,33 @@ if PORT and direct("next_merc"):   # NextMerc? 0x1315C (Space on the tactical sc
 if direct("turn_end"):   # FirstMerc?, TurnSightings?, EnemiesTurn?, EndTurn?, MercsTurn?: called directly
     area = [(0x92D80, 0x100), (0x229C80, 0x190), (0x22A400, 0x100), (0x22A0C0, 0x20), (0x284F00, 0x30),
             (ai.G_KNOWN, 0x30), (ai.G_REMEMBER_E, 0x1C0), (ai.G_BLED, 0x30), (G_SOLDIERS, 0x6000), (G_TILEMAP, 8 * 3136),
-            (ai.G_GROUND_ITEMS, 12 * 200)]
+            (ai.G_GROUND_ITEMS, 12 * 200), (0x9300C, 1), (0x92F60, 4)]   # (time compression + tick step: #70 F18)
     save = [bytes(e.uc.mem_read(rt(a), k)) for a, k in area]
-    local_ = ("move_merc", "w_11fb4", "w_67bf0", "w_681d0", "w_67e18")
+    local_ = ("move_merc", "w_11fb4", "w_67bf0", "w_681d0", "w_67e18", "w_3f578")
     for c_ in local_:
         e.stub(rt(CALLEES[c_][0]), make_stub(c_, CALLEES[c_][1]), POP.get(c_, 0))
+    mwait_te_ = [a_ for a_ in (0x67C54, 0x67C68) if rt(a_) not in e.stubs]   # TimeCompress(0)'s button-up waits
+    for a_ in mwait_te_:                                                        # (F18): platform code, silent
+        e.stub(rt(a_), lambda em_, *_: 0, 0)
+    rr18_ = random.Random(18)              # (own stream: the cases of the other draws stay)
     real_start = ai.start_turn
-    ai.start_turn = lambda s_, w_: w_.ext("w_11fb4", s_)
+
+    def bleed_(k_):                  # StartTurn? bleeds: g_bled of the soldier's id (step 6 of EnemiesTurn? reads it)
+        if k_ in START_BLED:
+            e.w8(rt(ai.G_BLED) + e.r8(rt(G_SOLDIERS) + 0x200 * k_ + 0x17A), START_BLED[k_])
+
+    def start_(s_, w_):
+        r_ = w_.ext("w_11fb4", s_)
+        bleed_(s_.slot if hasattr(s_, "slot") else SP[s_.base])
+        return r_
+    ai.start_turn = start_
+    st0_, pop0_ = e.stubs[rt(CALLEES["w_11fb4"][0])]
+
+    def st11fb4_(emu, eax, edx, ebx, ecx):
+        r_ = st0_(emu, eax, edx, ebx, ecx)
+        bleed_(SP[eax])
+        return r_
+    e.stubs[rt(CALLEES["w_11fb4"][0])] = (st11fb4_, pop0_)
     names_ = ("first_merc", "turn_sightings", "enemies_turn", "end_turn", "mercs_turn")
     for i in range(5000):
         which = i % 5
@@ -8394,6 +8798,7 @@ if direct("turn_end"):   # FirstMerc?, TurnSightings?, EnemiesTurn?, EndTurn?, M
             e.w8(a_ + 0x9C, rng.choice([0, 1, 0xFF, 3]))
             e.w8(a_ + 0x1A5, rng.choice([0, 3, 10, 25, 0x90]))
             e.w8(a_ + 0x95, rng.randrange(256))
+            e.w8(a_ + 0x186, rng.choice([0, 0, 1, 0xFF, 2]))   # F15: a down enemy gets the slide
             e.w16(a_ + 0x96, rng.randrange(1 << 16))
             own = e.r16(a_ + 0x114)
             e.w16(a_ + 0x120, rng.choice([0xC41, 0xC41, own, rng.randrange(3136)]))
@@ -8412,7 +8817,8 @@ if direct("turn_end"):   # FirstMerc?, TurnSightings?, EnemiesTurn?, EndTurn?, M
         for a_, vals in ((0x92DDC, [0, 1]), (ai.G_SHOW_UI, [0, 1, 1]), (0x92DCD, [0, 1]), (0x22A0CD, [0, 1]),
                          (0x284F0F, [0x40, 0x40, 2, 7, 8]), (ai.G_SELECTED, [0, 3, 7, 8, 0x2A, 0x2F]), (0x92DEC, [0x40, 3]),
                          (0x22A0D0, [0, 1, 0xFF]), (0x22A0CE, [0, 1]), (0x92DA8, [0x40, 0x40, 3]), (0x92DDF, [0, 2, 3, 5]),
-                         (0x284F20, [0, 1, 0xFF]), (0x284F21, [0, 1, 0xFF]), (0x92DBC, [0, 1, 2]), (0x92DC0, [0, 1, 2])):
+                         (0x284F20, [0, 1, 0xFF]), (0x284F21, [0, 1, 0xFF]), (0x92DBC, [0, 1, 2]), (0x92DC0, [0, 1, 2]),
+                         (0x93458, [0, 0, 1, 0xFF])):
             e.w8(rt(a_), rng.choice(vals))
         e.w16(rt(0x92DAA), rng.choice([0xC41, 300]))
         e.w32(rt(0x229DF0), rng.choice([0, 4, 12, 30, 0xFFFFFFFF]))
@@ -8436,12 +8842,17 @@ if direct("turn_end"):   # FirstMerc?, TurnSightings?, EnemiesTurn?, EndTurn?, M
                 e.w8(rt(G_TILEMAP) + 8 * t_ + 6, rng.choice([g_, g_, 200, 0xFF]))
                 e.w8(rt(ai.G_GROUND_ITEMS) + 12 * g_, typ_)
                 e.w8(b_ + 8, rng.choice([ai.explosive_kind(typ_)] * 3 + [rng.randrange(10)]))
+        tc_ = rr18_.choice([0, 0, 1])      # F18: time compression on in some cases
+        e.w8(rt(0x9300C), tc_)
+        e.w32(rt(0x92F60), 1000 if tc_ else 10)
         flag = rng.choice([0, 1, 0x100])
+        START_BLED.clear()
+        START_BLED.update({k_: rng.choice([1, 1, 2]) for k_ in range(0x28, 0x30) if rng.random() < 0.4})
         base = {"w_11fb4": [0] * 8, "mission_cancel": [0], "turn_banner": [0], "w_17b70": [0] * 8, "enemy_turned": [0] * 8,
                 "guard_turned": [0] * 16, "share_sightings": [0] * 16, "w_73d28": [0] * 64, "w_73f3c": [0] * 320,
                 "explode": [0] * 5, "w_355d0": [0] * 5, "mouse_hide": [0], "w_46a4c": [0] * 4, "w_10454": [0],
                 "w_331a4": [0] * 8, "w_67bf0": [0], "w_681d0": [0], "w_67e18": [0], "path_ap": [0], "move_merc": [0],
-                "w_10398": [0], "focus": [0], "w_1148c": [rng.choice([0, 1, 0x100])]}
+                "w_10398": [0], "focus": [0], "w_1148c": [rng.choice([0, 1, 0x100])], "w_3f578": [0] * 8}
         script = {k_: list(v) for k_, v in base.items()}
         snap = [bytes(e.uc.mem_read(rt(a), k)) for a, k in area]
         log.clear()
@@ -8475,10 +8886,13 @@ if direct("turn_end"):   # FirstMerc?, TurnSightings?, EnemiesTurn?, EndTurn?, M
         for (a, k), b in zip(area, snap):
             e.uc.mem_write(rt(a), b)
     ai.start_turn = real_start
+    START_BLED.clear()
     for (a, k), b in zip(area, save):
         e.uc.mem_write(rt(a), b)
     for c_ in local_:
         e.stubs.pop(rt(CALLEES[c_][0]), None)
+    for a_ in mwait_te_:
+        e.stubs.pop(rt(a_), None)
 if direct("turn_new"):   # NewTurn? 0x126C8 called directly (turns.md New turn); its callees stubbed, FirstMerc?, AgeKnowledge?,
     # MercQuoteEvent? and MercBusy? real (library procedures in the port)
     area = [(ai.G_SECTOR_TBL9, 60 * 9), (0x92D80, 0x100), (0x93D50, 8), (0x229C80, 0x190), (0x229FA0, 0x356), (0x22A400, 0x100), (0x284F00, 0x30),
@@ -8525,7 +8939,7 @@ if direct("turn_new"):   # NewTurn? 0x126C8 called directly (turns.md New turn);
         for a_, vals in ((ai.G_COMBAT, [0, 1, 1]), (0x92DDD, [0, 0, 1]), (0x92DD0, [0, 0, 1]), (0x92DC7, [0, 3, 7, 0x2A, 0x30, 0x40]),
                          (ai.G_SELECTED, [0, 3, 7, 8, 9, 0x2A, 0x40]), (0x92DEC, [0x40, 0x40, 2, 9]), (0x92DD5, [0x40, 0x40, 1, 5]),
                          (0x22A1F2, [0, 3, 4, 5]), (0x22A1F3, [0, 1]), (0x284F02, [0, 0, 1, 2]), (ai.G_SHOW_UI, [0, 1]),
-                         (0x22A0C2, [0, 1]), (0x284F0F, [0x40, 2]), (0x92DBC, [0, 1, 2]), (0x92DC0, [0, 1, 2])):
+                         (0x22A0C2, [0, 1, 2]), (0x284F0F, [0x40, 2]), (0x92DBC, [0, 1, 2]), (0x92DC0, [0, 1, 2])):
             e.w8(rt(a_), rng.choice(vals))
         if rng.random() < 0.3:
             e.w8(rt(ai.G_CUR_SECTOR), 0)
@@ -8881,14 +9295,16 @@ if direct("reload"):    # (end of file: own random source) MsgReloaded? 0x40094 
         e.uc.mem_write(rt(a_), b_)
     e.stubs.update({rt(a_): f_ for a_, f_ in lifted_.items()})
 if direct("leave_sector"):    # (end of file: own random source) LeaveSectorCleanup? 0x30D6C (AL flag), from the leave path
-    lifted_ = {a_: e.stubs.pop(rt(a_)) for a_ in (0x30D6C,) if rt(a_) in e.stubs}
+    lifted_ = {a_: e.stubs.pop(rt(a_)) for a_ in (0x30D6C, 0x50EA8, 0x41178, 0x41E1C, 0x41574) if rt(a_) in e.stubs}
+    if PORT:                       # RecalcTerritory 0x50EA8 runs for real (F22 calls it after SectorGained?): the port
+        port_lib.LEDGER = True     # world carries the accounts; both sides' totals + sector table are compared
     CALLEES.setdefault("sector_gained", (0x3FA54, "i"))
     added_ = [c_ for c_ in ("sector_gained",) if rt(CALLEES[c_][0]) not in e.stubs]
     for c_ in added_:
         e.stub(rt(CALLEES[c_][0]), make_stub(c_, CALLEES[c_][1]), POP.get(c_, 0))
     dr = random.Random(1000003 * 77 + 3)
     tsave = [bytes(e.uc.mem_read(rt(a_), k_)) for a_, k_ in ((G_SOLDIERS, 0x200 * 0x30), (ai.G_SECTOR_TBL9, 9 * 60),
-                                                             (ai.G_CUR_SECTOR, 1))]
+                                                             (ai.G_CUR_SECTOR, 1), (0x229FA0, 0x98))]
     w_ = World(0)
     w_.memrun = True
     for i in range(n // 6):
@@ -8919,13 +9335,16 @@ if direct("leave_sector"):    # (end of file: own random source) LeaveSectorClea
             e.w8(row_ + b_, dr.choice([0, 0, 1, 2, 0x80, 0xFF] if b_ else [0, 1, 2, 3, 0xFE, 0xFF]))
         flag_ = dr.choice([0, 1, 1, 0x100, 5])
         pre_ = bytes(e.uc.mem_read(rt(G_SOLDIERS), 0x200 * 0x30))
-        pre_row_ = bytes(e.uc.mem_read(row_, 9))
+        pre_tbl_ = bytes(e.uc.mem_read(rt(ai.G_SECTOR_TBL9), 9 * 60))
+        pre_acc_ = bytes(e.uc.mem_read(rt(0x229FA0), 0x98))
         script = collections.defaultdict(list)
         log.clear()
         e.call(rt(0x30D6C), flag_)
         got_s, got_log = bytes(e.uc.mem_read(rt(G_SOLDIERS), 0x200 * 0x30)), list(log)
+        got_t = bytes(e.uc.mem_read(rt(ai.G_SECTOR_TBL9), 9 * 60)) + bytes(e.uc.mem_read(rt(0x229FA0), 0x98))
         e.uc.mem_write(rt(G_SOLDIERS), pre_)
-        e.uc.mem_write(row_, pre_row_)
+        e.uc.mem_write(rt(ai.G_SECTOR_TBL9), pre_tbl_)
+        e.uc.mem_write(rt(0x229FA0), pre_acc_)
         script = collections.defaultdict(list)
         log.clear()
         if PORT:
@@ -8933,6 +9352,9 @@ if direct("leave_sector"):    # (end of file: own random source) LeaveSectorClea
         else:
             ai.leave_sector(w_, flag_)
         my_s = bytes(e.uc.mem_read(rt(G_SOLDIERS), 0x200 * 0x30))
+        my_t = bytes(e.uc.mem_read(rt(ai.G_SECTOR_TBL9), 9 * 60)) + bytes(e.uc.mem_read(rt(0x229FA0), 0x98))
+        if got_t != my_t:          # sector table + territory totals (RecalcTerritory under F22)
+            got_s, my_s = got_s + got_t, my_s + my_t
         key_ = (weak_, len([c_ for c_ in log if c_[0] in ("merc_dies", "w_3a8c0")]) > 0, log[-2][0] if len(log) > 1 else "-")
         counts["leave_sector"] = counts.get("leave_sector", 0) + 1
         results.setdefault("leave_sector", {}).setdefault(key_, 0)
@@ -8942,8 +9364,11 @@ if direct("leave_sector"):    # (end of file: own random source) LeaveSectorClea
             if fails <= 10:
                 print(f"MISMATCH leave_sector case {i} flag {flag_:#x} sector {cur_}: soldiers "
                       f"{[hex(o) for o in range(len(my_s)) if got_s[o] != my_s[o]][:8]}\n  calls original {got_log}\n  calls mirror   {log}")
-    for (a_, k_), b_ in zip(((G_SOLDIERS, 0x200 * 0x30), (ai.G_SECTOR_TBL9, 9 * 60), (ai.G_CUR_SECTOR, 1)), tsave):
+    for (a_, k_), b_ in zip(((G_SOLDIERS, 0x200 * 0x30), (ai.G_SECTOR_TBL9, 9 * 60), (ai.G_CUR_SECTOR, 1),
+                             (0x229FA0, 0x98)), tsave):
         e.uc.mem_write(rt(a_), b_)
+    if PORT:
+        port_lib.LEDGER = False
     for c_ in added_:
         e.stubs.pop(rt(CALLEES[c_][0]), None)
     e.stubs.update({rt(a_): f_ for a_, f_ in lifted_.items()})
@@ -9377,5 +9802,5 @@ for k in counts:                     # machine-readable case counts: check.py CA
     print(f"CASES {k}={counts[k]}")
 if os.environ.get("AI_DIFF_TIMES"):
     print("TIMES " + " ".join(f"{k}={v:.1f}" for k, v in SPENT.most_common()))
-print(f"ai_diff: {summary}; {fails} mismatches" + (f" (original never returned, skipped: {hangs})" if hangs else ""))
+print(f"ai_diff{f' --fan {FAN}' if FAN is not None else ''}: {summary}; {fails} mismatches" + (f" (original never returned, skipped: {hangs})" if hangs else ""))
 sys.exit(1 if fails else 0)

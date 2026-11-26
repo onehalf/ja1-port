@@ -328,7 +328,8 @@ impl Ai {
                 if self.rd8(B_1B9) >= 5 && self.rd8(B_195) == 0 {
                     self.call(op::END_TASK, &[slot, 1]);
                 }
-                if a16 != 5 {
+                // F23 (1.15m AnimStep 0x1F404): a soldier under 15 health (signed) does not get the stand anim 4.
+                if a16 != 5 && !(crate::fanfix::on(23) && (self.rd8(HP) as i8) < 15) {
                     code = 4;
                 }
                 if self.rd8(B_1CC) != 0 {
@@ -976,7 +977,16 @@ impl Ai {
                 let me = self.s16_at(TILE);
                 let back = self.around_value() as i32;
                 let f = self.rd8(B_1A1) as i32;
-                if self.blocked(step(me, self.dir_step(back))) || self.blocked(step(me, self.dir_step(f))) {
+                if crate::fanfix::on(23) {
+                    // F23 (1.15m AnimFrame 0x18E35/0x18E7A): only the tile behind is tested; a free one gives a 1 px
+                    // step forward (inc edi) instead of the test of the tile ahead (the pixel step tests the new tile).
+                    if self.blocked(step(me, self.dir_step(back))) {
+                        self.call(op::SET_ANIM, &[slot, 0x2B, 0, 1]);
+                        go = false;
+                    } else {
+                        stp = 1;
+                    }
+                } else if self.blocked(step(me, self.dir_step(back))) || self.blocked(step(me, self.dir_step(f))) {
                     self.call(op::SET_ANIM, &[slot, 0x2B, 0, 1]);
                     go = false;
                 }
@@ -987,6 +997,9 @@ impl Ai {
                     self.wr16(0x136, 0);
                     self.call(op::SET_ANIM, &[slot, 1, 1, 1]);
                     go = false;
+                    if crate::fanfix::on(23) {
+                        stp = 2; // F23 (1.15m 0x18F18 scasw: edi += 2, ecx = bsf edi = 1): a 2 px step after the turn
+                    }
                 } else {
                     if self.rd8(0x17D) == 0 {
                         self.wr8(0x17D, self.rd8(B_1A1));
@@ -1001,6 +1014,9 @@ impl Ai {
                         go = false;
                     } else {
                         self.wr16(0x136, 0);
+                        if crate::fanfix::on(23) {
+                            stp = -1; // F23 (1.15m 0x18FE6 dec edi): a free tile ahead gives a 1 px step back
+                        }
                     }
                 }
             }
@@ -1099,16 +1115,32 @@ impl Ai {
         // 4.
         let ox = self.rd16(POS_X);
         let oy = self.rd16(POS_Y);
-        let g = stp * 65 / 100;
+        let (m, g) = if crate::fanfix::on(23) {
+            // F23 (1.15m AnimFrame 0x192A4): a diagonal step is s + s/2 on x and s on y; to the north-east a step that
+            // stays >= 0 gets s/2 once more (the 1.13b gives s on x and 65% of s on y).
+            let fc = self.rd8(B_1A1);
+            if (1..=8).contains(&fc) && fc % 2 == 0 {
+                let h = stp / 2;
+                let mut m = stp + h;
+                if m >= 0 && fc == 2 {
+                    m += h;
+                }
+                (m, stp)
+            } else {
+                (stp, stp)
+            }
+        } else {
+            (stp, stp * 65 / 100)
+        };
         let mv = match self.rd8(B_1A1) {
             1 => Some((0, -stp)),
-            2 => Some((stp, -g)),
+            2 => Some((m, -g)),
             3 => Some((stp, 0)),
-            4 => Some((stp, g)),
+            4 => Some((m, g)),
             5 => Some((0, stp)),
-            6 => Some((-stp, g)),
+            6 => Some((-m, g)),
             7 => Some((-stp, 0)),
-            8 => Some((-stp, -g)),
+            8 => Some((-m, -g)),
             _ => None,
         };
         if let Some((dx, dy)) = mv {

@@ -338,7 +338,7 @@ scalars: `cur_sector`, `alarm`, `combat`, `difficulty`, `mission_step`, `mission
 `quote_focus`, `quote_delay`, `quote_event`, `opt_half_delay`, `opt_follow`, `opt_reload_msg`, `alone_warned`,
 `follow_all`, `stop_timer`, `interrupted`, `walk_ap`, `spotted`, `opt_step_text`, then the later scalars in port_api.md struct order (the last ones: ..., `squad_lost`, `last_killer`, `fast_timer`).
 
-Command: `ja1front ISO EXE --world SAVE OUT` loads the world from the files (sections 1-3, no sector entry) and
+Command: `ja1-port ISO EXE --world SAVE OUT` loads the world from the files (sections 1-3, no sector entry) and
 writes it to OUT.
 
 ## 7. The front-end as host (sector entry)
@@ -361,12 +361,12 @@ that remain are file access and per-sector resets of the front-end's own state. 
 
 The host must not change the world during these calls.
 
-**Test command.** `ja1front ISO EXE --enter SAVE SEED OUT`: sections 1-3 (load), section 4 (map, ja1_enter_sector
+**Test command.** `ja1-port ISO EXE --enter SAVE SEED OUT`: sections 1-3 (load), section 4 (map, ja1_enter_sector
 with this host, view; opt_reload_msg = 1 as after the step 3 draw, also when nothing is drawn), then write the world image (section 6) to OUT, then one more line of text to stdout:
 `seed S draws D` (the end seed as a decimal u32, D = the count of random draws, the host's own op 93 draw included). SEED = the start seed (a
 decimal u32).
 
-**Viewer.** `ja1front ISO EXE --play SAVE [SEED] [--png OUT]` enters the sector of the save (SEED default 1) and
+**Viewer.** `ja1-port ISO EXE --play SAVE [SEED] [--png OUT]` enters the sector of the save (SEED default 1) and
 shows it as the plain viewer does, inside the tactical screen of panel.md (or writes that 320 x 200 screen to OUT), with the soldiers drawn per tactical_map.md "Soldiers":
 tile map = the world's `tiles`, soldier records = `soldiers`, script word of slot k = the u16 at byte offset
 (u32 soldier +0x90) in `anim_scripts`, show all = the "show all enemies" byte `follow_all` (0 unless the debug key Alt+E set it, cursor.md "Debug keys (level 4)"), roofs = the roofs flag (tactical_map.md "Drawing order"), sight viewer = 0xFF while `sees_slot` = 0x40 (so step 4 never hides
@@ -375,7 +375,7 @@ record. The first view = the world's view_x / view_y (pixels; top-left tile c0 =
 
 ## 8. Play (front-end)
 
-`ja1front ISO EXE --play SAVE [SEED]` (the window, not `--png`) runs the sector after the viewer setup of
+`ja1-port ISO EXE --play SAVE [SEED]` (the window, not `--png`) runs the sector after the viewer setup of
 section 7:
 
 - **Game time.** Every 10 ms of real time is one tick: `ja1_tick` (soldier_update.md "Timer tick"). A front-end
@@ -586,7 +586,7 @@ section 7:
   library. Every other op: result 0 and no world change (a viewer has no sound, text or panel yet); the front-end
   writes each new op number once to stderr (`host op N`). The out buffer of such an op stays as it is.
 
-**Play script (test command).** `ja1front ISO EXE --script SAVE SEED SCRIPT OUT` runs play without a window and
+**Play script (test command).** `ja1-port ISO EXE --script SAVE SEED SCRIPT OUT` runs play without a window and
 without real time: sections 1-4 as `--enter`, then the passes of the play loop above, each pass with exactly one
 tick. SCRIPT is a text file, one command per line (`#` starts a comment line):
 - `wait N`: N passes with no input.
@@ -622,7 +622,7 @@ world image (section 6) goes to OUT and one line per soldier 0..47 with +0x182 â
 (`hover`), `cursor tile T value V mode M ap A over O label "TEXT"` (the cursor state), then `passes P left L` (L = 1
 when the sector was left).
 
-**Test command.** `ja1front ISO EXE --walk SAVE SEED SLOT TILE TICKS OUT`: sections 1-4 as `--enter`, then
+**Test command.** `ja1-port ISO EXE --walk SAVE SEED SLOT TILE TICKS OUT`: sections 1-4 as `--enter`, then
 `ja1_move_order` (SLOT, TILE, 0, 0, 0, 0, 0), then TICKS times: `ja1_tick`, `ja1_frame`. Host calls as in "Host
 calls during play". Then the world image (section 6) goes to OUT, and one line to stdout: `walk R at T` (R = the
 move order's result, T = s16 +0x114 of SLOT at the end).
@@ -774,7 +774,7 @@ the front-end goes on (stderr gets one line `save: PATH: ERROR`).
 **Loading it again.** The written file is a day save as in section 3: `ja1front` starts from it as from any other
 save (`--world`, `--script`, the window).
 
-**Test command.** `ja1front ISO EXE --save-copy SAVE OUT`: loads SAVE as in sections 1..3 (no sector entry) and at
+**Test command.** `ja1-port ISO EXE --save-copy SAVE OUT`: loads SAVE as in sections 1..3 (no sector entry) and at
 once writes the day save of this section to OUT. Its bytes equal SAVE except the sector reset and the profile
 fixes of section 3 (record bytes 0..87 of each sector record come from JAGGED.DAT) and, when SAVE is longer than the tail above,
 the extra bytes at the end.
@@ -865,7 +865,7 @@ at OfficeScreen), LoadJaggedDat 0x371BC, LoadNewProfEdt 0x379B4 + 0x503F8 (profi
 0x514E0, ItemInit?(2, 2), AddStashItem? 0x51D50), SetSectorOwned 0x3DDE4, CalcProcessCap 0x41574, WorkerPool 0x50BC4,
 FUN_000377b0 (options). validate/diff/newgame_diff.py runs NewGameInit and SaveGame 0x4EBC8 in Unicorn.
 
-**Test command.** `ja1front ISO EXE --new-game D Q OUT` writes the day save of a new game (section 10, after
+**Test command.** `ja1-port ISO EXE --new-game D Q OUT` writes the day save of a new game (section 10, after
 `ja1_new_game`) to OUT.
 
 ## 12. The main menu (front-end)
@@ -968,14 +968,14 @@ S = 0: 1; S < 0: 0. Down: S = âˆ’1: 1; S < 1: S + 1; else 0. The choice is the q
 **Leave** (the office, strategic.md "The office", hot spot 7): the office ends with result 7; the day loop stops
 (no sunrise) and the main menu opens as above.
 
-**Play script.** `ja1front ISO EXE --script menu SEED SCRIPT OUT` starts at the main menu (no save). Lines
+**Play script.** `ja1-port ISO EXE --script menu SEED SCRIPT OUT` starts at the main menu (no save). Lines
 `menu X Y B [K,K,...]` are polls of the menu screens (main menu, Set Difficulty, Set Quick-Save Mode): the mouse at
 (X, Y), B bit 0 = the left button held, then the key bytes (the screen takes one key per poll: an extended key is
 two bytes in one poll, the rest wait for the next polls). stdout: `menu open R C` when the menu opens, `menu
 choice K`, `menu difficulty D`, `menu quick-save Q`, `menu exit`. After a New Game or Continue choice the other
 lines run as with a save, the day loop starting at the office (a `day` line runs it); `office leave` when the office
 ends with Leave, then the next `menu` lines go to the menu again. JA1_MENU_PNG = the picture of the menu screen
-after the last menu poll. In the window: `ja1front ISO EXE --menu [SAVE_DIR]`.
+after the last menu poll. In the window: `ja1-port ISO EXE --menu [SAVE_DIR]`.
 
 Evidence (2026-10-25): GameMain 0x4FFEC (asm + pseudocode: FormatSaveName 0x4FDB8 = any GAMEn.SAV, rows at
 MouseInRect 0x67C0C (60, 43 + 22k, 250, 65 + 22k), keys 0x48 / 0x50 / 13, mouse to (0xF0, 0x34 + 22k) by 0x681D0,

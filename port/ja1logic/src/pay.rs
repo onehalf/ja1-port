@@ -158,6 +158,10 @@ pub(super) fn collect_cash(w: *mut Ja1World) {
         add(w, DAY_INCOME, total);
         add(w, BALANCE, total);
         add(w, DAY_NET, total);
+        if crate::fanfix::on(41) {
+            // #70 F41: 1.15m CollectCash? 0x44616 -> 0x62344 also adds the cash to g_prevBalance 0x229AC0.
+            unsafe { (*w).prev_balance = (*w).prev_balance.wrapping_add(total) };
+        }
     }
 }
 

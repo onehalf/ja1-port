@@ -11,6 +11,9 @@ Fuzzed: the sector table (flags, enemies, mercs, tappers, guards, unhealthy), th
 sector record, Santino's reserve 0x22A008, guard_skill, supplies[0], the story bytes of the story condition, the pick
 counter 0x22A0BD, time_compress, difficulty, day.
 --port: ja1_enemy_pick / ja1_enemy_move on the same state; the world, the log and the result are compared.
+--fan IDS (with --port; #70): the original side runs the 1.15m bytes of EnemyMoves? / SectorValue that fix F16 owns
+(0x3EF76, cave 0x3E0CF, 0x3F0A8), the port runs with the fan fixes IDS on (`all` or `F16`); the mirror is not
+compared (it is 1.13b).
 Exits 1 on any mismatch.
 """
 import os, random, sys
@@ -26,7 +29,14 @@ from emu import Emu                  # noqa: E402
 argv = sys.argv[1:]
 if "--lib" in argv:
     os.environ["JA1_PORT_LIB"] = argv[argv.index("--lib") + 1]
-args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] != "--lib")]
+args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
+FAN = None
+if "--fan" in argv:
+    v = argv[argv.index("--fan") + 1]
+    FAN = (1 << 128) - 1 if v == "all" else sum(1 << (int(x.strip().lstrip("Ff")) - 1) for x in v.split(","))
+    if "--port" not in argv:
+        raise SystemExit("enemy_diff: --fan needs --port")
+F16_ONLY = [(0x3EF76, 0x3EF96), (0x3E0CF, 0x3E0DE), (0x3F0A8, 0x3F0A9)]
 N = int(args[0]) if args else 3000
 DUMP = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
 PORT = "--port" in argv
@@ -41,6 +51,10 @@ if not os.path.exists(DUMP):
     print(f"enemy_diff: {DUMP} missing")
     sys.exit(1)
 e = Emu(dump=DUMP, fast=True)
+if FAN is not None:
+    e.put_115m(only=F16_ONLY)
+if PORT:
+    port_lib.fan_fixes(FAN or 0)
 rt = e.rt
 log, draws = [], []
 case = {"walk": []}
@@ -159,6 +173,27 @@ def fuzz(r):
     src = r.choice([0, 0, r.randrange(60), r.randrange(60), r.randrange(60)])
     if kind == "move" and r.random() < .06:
         src = zero_score(r) or src
+    if FAN is not None and kind == "move" and r.random() < .5:
+        # F16: an attack on the plant 0x35 from a neighbour (the 1.15m change matters only there)
+        src = r.choice([0x2B, 0x34, 0x36])
+        e.w8(rt(0x22A04D), 1 if r.random() < .8 else 0)
+        o = 9 * 0x35
+        tbl[o + 2] = r.choice([1, 2, 4, 40, 120, 255])
+        tbl[o + 4] = r.choice([0, 3, 60, 200])
+        tbl[9 * src + 1] = r.choice([3, 5, 8])
+        e.uc.mem_write(rt(TBL), bytes(tbl))
+    elif FAN is not None and kind == "move" and r.random() < .5:
+        # F16: an attack from a story sector (its 1.13b attackers' weight is 4x, the 1.15m one is the target's)
+        src = r.choice([0x11, 0x1B])
+        e.w8(rt(0x22A049), 2)
+        e.w8(rt(0x22A046), 2)
+        e.w8(rt(0x22A04B), 0)
+        tbl[9 * src + 1] = r.choice([3, 5, 8])
+        for nb in (src - 1, src + 1, src - 10, src + 10):
+            if r.random() < .6:
+                tbl[9 * nb + 2] = r.choice([1, 2, 4])
+                tbl[9 * nb + 1] = r.choice([0, 1, 3])
+        e.uc.mem_write(rt(TBL), bytes(tbl))
     return kind, src
 
 
@@ -297,6 +332,9 @@ def main():
         case["walk"] = list(walks)
         vm, lm, dm = mirror(kind, src, dr)
         sm = state()
+        if FAN is not None:
+            sm = so = ()
+            vm, lm, dm = vo, lo, dr
         if (vo, lo) != (vm, lm):
             bad.append(f"mirror result {vo} vs {vm}, log {first_diff(lo, lm)}")
         if [n for n, _ in dr] != [n for n, _ in dm]:
@@ -335,7 +373,7 @@ def main():
     if missing:
         print(f"enemy_diff: never reached: {missing}")
         fails += 1
-    print(f"enemy_diff{' (port)' if PORT else ''}: {N} cases, {fails} mismatches")
+    print(f"enemy_diff{' (port)' if PORT else ''}{f' --fan {FAN:#x}' if FAN is not None else ''}: {N} cases, {fails} mismatches")
     sys.exit(1 if fails else 0)
 
 

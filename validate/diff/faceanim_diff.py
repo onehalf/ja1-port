@@ -32,7 +32,7 @@ ROOT = os.path.join(HERE, "..", "..")
 sys.path[:0] = [HERE, os.path.join(ROOT, "tools")]
 from emu import Emu                  # noqa: E402
 
-FRONT = os.path.join(ROOT, "port/ja1front/target/release/ja1front")
+FRONT = os.path.join(ROOT, "port/ja1front/target/release/ja1-port")
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 N = int(args[0]) if args else 2000
 seed = int(sys.argv[sys.argv.index("--seed") + 1]) if "--seed" in sys.argv else 1

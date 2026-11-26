@@ -1,6 +1,10 @@
 """Differential test: the overview mouse step (panel.md "The overview mouse step"), original vs port.
 
-usage: .venv/bin/python validate/diff/ovmouse_diff.py [ncases=3000] [DUMP] [--port] [--lib SO]
+usage: .venv/bin/python validate/diff/ovmouse_diff.py [ncases=3000] [DUMP] [--port] [--lib SO] [--fan 46[,61]]
+--fan 46 (#70 F46, row 60 rest): the original runs the 1.15m bytes 0x2471A (merc under 15 hp: Not available!) and
+0x24733 + helper 0x2C57C (a soldier tile walks only when that soldier's visible byte +0x9C <= 0); the port runs with
+fan fix F46 on. --fan 61 (#70 F61, row 87): the 1.15m call 0x24727 -> cave 0x8AF04 runs CursorItemBack? 0x53660
+(stubbed, logged as call 8) before SelectMerc?; without 61 that call stays 1.13b.
 Per case: fuzzed mouse point and buttons, cursor tile, ap_timer, the selected soldier's bytes, the occupant of the
 mouse tile and its hp, and the path cost. The original 0x24630 runs in Unicorn on tac60 with its calls stubbed and
 logged: show mouse 0x67BF0, Hide path marks 0x1D8B8, TileOccupant 0x23944 (answers the fuzzed occupant), SelectMerc?
@@ -17,7 +21,9 @@ from emu import Emu                  # noqa: E402
 argv = sys.argv[1:]
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
-args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
+args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
+FAN_IDS = sorted(int(x.lstrip("F")) for x in argv[argv.index("--fan") + 1].split(",")) if "--fan" in argv else []
+FAN = bool(FAN_IDS)
 ncases = int(args[0]) if args else 3000
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
 PORT = None
@@ -25,6 +31,8 @@ if "--port" in argv:
     PORT = ctypes.CDLL(LIB)
     PORT.ja1f_ov_mouse.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
     PORT.ja1f_ov_mouse.restype = ctypes.c_int32
+    PORT.ja1_fan_fixes_set.argtypes = [ctypes.c_uint64]
+    PORT.ja1_fan_fixes_set(sum(1 << (k - 1) for k in FAN_IDS))
 
 SOLDIERS, REC, PTRS = 0xFA958, 0x200, 0x100958
 SEL = 0x284F11
@@ -36,7 +44,10 @@ NAMES = "shown mouse_on x y buttons tile ap_timer colour cost over sel 1b8 hp ap
 
 e = Emu(dump=dump, fast=True)
 rt = e.rt
-log, ans, bad = [], [0x40, 0, 0], []
+FAN_RUNS = {46: [(0x2471A, 0x24720), (0x24733, 0x24738), (0x2C570, 0x2C5A7)], 61: [(0x24727, 0x2472C)]}
+if FAN:
+    e.put_115m(only=[r for k in FAN_IDS for r in FAN_RUNS[k]])
+log, ans, bad = [], [0x40, 0, 0, 0], []
 sel_now = [0]
 
 
@@ -92,6 +103,7 @@ e.stub(rt(0x1CFEC), walk)
 e.stub(rt(0x1D32C), cost, pop=12)
 e.stub(rt(0x67C68), lambda em, *r: None)
 e.stub(rt(0x244C8), lambda em, *r: put_log(7, 0))
+e.stub(rt(0x53660), lambda em, *r: put_log(8, 0))     # CursorItemBack? (1.15m cave 0x8AF04 only)
 
 
 def addr(f, s):
@@ -136,7 +148,12 @@ for i in range(ncases):
             rng.choice([1, 1, 0, rng.randrange(256)]), rng.choice([30, 15, 14, 0, rng.randrange(-128, 128)]),
             rng.choice([rng.randrange(0, 40), rng.randrange(-128, 128)]), rng.randrange(256), rng.choice([0, 1]),
             rng.choice([0, 1])]
-    ans[:] = [occ, 0, rng.choice([0, 5, 20, 40, rng.randrange(-10, 200)])]
+    ans[:] = [occ, 0, rng.choice([0, 5, 20, 40, rng.randrange(-10, 200)]), 0]
+    vis_at = rec(occ) + 0x9C              # the 1.15m helper reads soldiers + 512 * occ + 0x9C for any occ < 0x40 signed
+    vis_old = e.r8(vis_at)
+    vis = rng.choice([0, 1, -1, rng.randrange(-128, 128)])
+    e.w8(vis_at, vis & 0xFF)
+    ans[3] = vis
     if occ < 64:
         e.w8(rec(occ) + 0x183, rng.choice([30, 15, 14, 0, rng.randrange(256)]))
     e.w32(rt(PTRS + 4 * sel), rec(sel))
@@ -151,6 +168,7 @@ for i in range(ncases):
     e.call(rt(0x24630))
     got = [get(f, sel) for f in FIELDS]
     olog = list(log)
+    e.w8(vis_at, vis_old)
     kind = "left" if vals[4] & 1 else "right" if vals[4] & 2 else "hover"
     by_kind[kind] = by_kind.get(kind, 0) + 1
     if PORT:
@@ -160,7 +178,7 @@ for i in range(ncases):
                 v[j] = vals[j] & 0xFF if not f[2] else ((vals[j] & 0xFF) ^ 0x80) - 0x80
             else:
                 v[j] = vals[j]
-        a = (ctypes.c_int32 * 3)(*ans)
+        a = (ctypes.c_int32 * 4)(*ans)
         lg = (ctypes.c_int32 * 32)()
         n = PORT.ja1f_ov_mouse(ctypes.addressof(v), ctypes.addressof(a), ctypes.addressof(lg))
         plog = [(lg[2 * j], lg[2 * j + 1]) for j in range(n)]
@@ -182,6 +200,6 @@ for i in range(ncases):
         print(f"HARNESS case {i}: {bad}")
 for a, b in saved:
     e.uc.mem_write(a, b)
-print(f"ovmouse_diff: {ncases} cases ({', '.join(f'{k} {n}' for k, n in sorted(by_kind.items()))})"
+print(f"ovmouse_diff{' --fan ' + ','.join(map(str, FAN_IDS)) if FAN else ''}: {ncases} cases ({', '.join(f'{k} {n}' for k, n in sorted(by_kind.items()))})"
       f"{'' if PORT else ' (original only)'}; {fails} mismatches")
 sys.exit(1 if fails else 0)

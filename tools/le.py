@@ -12,6 +12,10 @@ from collections import Counter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXE = os.path.join(ROOT, "rom", "JA.EXE")
+# Unofficial fan patch 1.15m (#70): same LE layout; 799 bytes of new code sit in the slack of obj1's last page
+# (0x8AC7D..0x8B000, outside vsize). load("115m") maps them (tail=True).
+EXES = {"113": EXE, "113b": os.path.join(ROOT, "third_party", "ja115m", "patch", "JA113B", "JA.EXE"),
+        "115m": os.path.join(ROOT, "third_party", "ja115m", "patch", "JA115", "jam115.exe")}
 
 # fake selectors for 16-bit selector fixups (flat model: one per object)
 SEL_BASE = 0x1000
@@ -51,8 +55,9 @@ class Fixup:
 
 
 class LEImage:
-    def __init__(self, path=EXE):
-        self.path = path
+    def __init__(self, path=EXE, tail=False):
+        """tail = also load the bytes past vsize up to the end of each object's last page (1.15m new code)."""
+        self.path, self.tail = path, tail
         d = self.raw = open(path, "rb").read()
         # bound DOS/4G stub: walk the MZ chain until the 'LE' header
         self.le, self.mz_base = self._find_le(d)
@@ -99,13 +104,14 @@ class LEImage:
         H, d = self.hdr, self.raw
         ps = H["page_size"]
         for o in self.objs:
-            o.data = bytearray(o.vsize)
+            lim = min(o.npages * ps, (o.vsize + ps - 1) // ps * ps) if self.tail else o.vsize
+            o.data = bytearray(lim)
             for k in range(o.npages):
                 pidx = o.page_idx + k               # 1-based logical page
                 num, fl = self.pages[pidx - 1]
                 size = H["last_page"] if pidx == H["npages"] else ps
                 obj_off = k * ps
-                size = min(size, o.vsize - obj_off) if obj_off < o.vsize else 0
+                size = min(size, lim - obj_off) if obj_off < lim else 0
                 if fl == 0 and size > 0:
                     fo = H["data_pages"] + (num - 1) * ps
                     o.data[obj_off:obj_off + size] = d[fo:fo + size]
@@ -196,7 +202,7 @@ class LEImage:
 
     def obj_at(self, lin):
         for o in self.objs:
-            if o.base <= lin < o.base + o.vsize:
+            if o.base <= lin < o.base + len(o.data):
                 return o
         return None
 
@@ -226,14 +232,15 @@ class LEImage:
         return None
 
 
-_cache = None
+_cache = {}
 
 
-def load():
-    global _cache
-    if _cache is None:
-        _cache = LEImage()
-    return _cache
+def load(ver=None):
+    """ver None = rom/JA.EXE (1.13; same code as 1.13b); "113b"; "115m" (with the tail code)."""
+    key = ver or "113"
+    if key not in _cache:
+        _cache[key] = LEImage(EXES[key], tail=(key == "115m"))
+    return _cache[key]
 
 
 def main():

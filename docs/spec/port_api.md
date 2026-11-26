@@ -683,7 +683,7 @@ match the original exactly (a test compares the whole call list).
 | 329 | enemy_walk_in | int slot, int edge | byte: ≠ 0 = the enemy (slot 0x28..0x2F) walked into the current sector at the edge (3, 5, 1, 7; 9 = Santino's troops); library op: strategic.md Walk-ins |
 | 330 | home_lost_msg | (none) | none (the status message "Home sector LOST!"; strategic.md The day's verdict) |
 | 331 | rating_word | int score | none (the host draws the day's rating word for score −3..3: TERRIBLE, LOUSY, POOR, FAIR, GOOD, EXCELLENT, OUTSTANDING; strategic.md The day's verdict) |
-| 332 | battle_ui | int k, int n | none (the battle show: k = 0 start, 1 open the battle sounds, 2 play attack, 3 play die n, 4 play mine n, 5 wait for the sound end, 6 stop the sound, 7 close the battle sounds, 8 end; strategic.md Sector battles) |
+| 332 | battle_ui | int k, int n | none (the battle show: k = 0 start, 1 open the battle sounds, 2 play attack, 3 play die n, 4 play mine n, 5 wait for the sound end, 6 stop the sound, 7 close the battle sounds, 8 end, 9 clear the last key byte (fan fix F27 only); strategic.md Sector battles) |
 | 333 | battle_wait | int ms | byte: ≠ 0 = the player skipped the rest of the battle show during the wait of ms milliseconds |
 | 334 | battle_box | int s, int enemies, int guards, int tappers, int kind | none (the box "ENEMY ATTACKING SECTOR s + 1!" with the counts; kind 99 first picture, 0 an enemy fell, 1 a guard fell, 2 a tapper fell) |
 | 335 | battle_msg | int t, int n | none (status message t with the sector number n: 0 Mine explodes, killing enemy in sector n; 1 GUARDS REGAIN SECTOR n; 2 ENEMY DEFEATED IN SECTOR n; 3 ENEMIES GAIN SECTOR n; 4 NATIVES LOSE SECTOR n; 5 GUARDS DEFEATED IN SECTOR n; 1..5 as a 1500 ms box) |
@@ -701,6 +701,7 @@ match the original exactly (a test compares the whole call list).
 | 354 | replay_record | int i | event i: from \| to << 8 \| code << 16, + 1 << 24 when Escape was pressed since the last poll |
 | 355 | replay_anim | int k, ... (strategic.md "The day replay") | bit 0 = Escape was pressed in the animation |
 | 356 | replay_draw | int k, int a | none (the island map from `sector_replay`) |
+| 357 | slide_view | int tile | none (SlideViewToTile? 0x3F578: the view slides to the tile; only fan fix F15 in EnemiesTurn? step 6) |
 
 **Division by zero.** Where a spec step divides by a value that is 0, the original game crashes. The library
 then makes host call 47 div_zero (a test host treats it as the expected crash). If the host returns, the
@@ -857,6 +858,9 @@ int32_t ja1_quest_check(Ja1World *w, const Ja1Host *h, int32_t quest);
 int32_t ja1_action_ap(Ja1World *w, const Ja1Host *h, int32_t slot, int32_t tile, int32_t flag);
 /* batch 13 (op 45 as a library op) */
 int32_t ja1_shot_ap(Ja1World *w, const Ja1Host *h, int32_t slot, int32_t tile);
+/* #70 fan fix test entries (fanfix_diff.py melee / throw): MeleeChance 0x56A78, ThrowChance 0x58BB0 */
+int32_t ja1_melee_chance(Ja1World *w, const Ja1Host *h, int32_t slot, int32_t defender, int32_t aim);
+int32_t ja1_throw_chance(Ja1World *w, const Ja1Host *h, int32_t slot, int32_t tile, int32_t aim);
 ```
 
 ## Turn entry points
@@ -1077,6 +1081,7 @@ void ja1_hated_check(Ja1World *w, const Ja1Host *h);
 int32_t ja1_aim_open(Ja1World *w, const Ja1Host *h);              /* Opening steps 1, 2; result t */
 int32_t ja1_aim_browse(Ja1World *w, const Ja1Host *h, int32_t q, int32_t d);   /* P (also accounts +0xA4) or -1 */
 int32_t ja1_aim_refusal(Ja1World *w, const Ja1Host *h, int32_t p);  /* the refusal reason (0 = signs) */
+int32_t ja1_aim_refusal_rule(Ja1World *w, const Ja1Host *h, int32_t p);  /* #42 grid: the same rule with no host call: reason | remark profile << 8 (0x40 = none) */
 int32_t ja1_aim_hire(Ja1World *w, const Ja1Host *h, int32_t p);     /* Hire without the quote: team slot or -1 */
 void ja1_aim_cancel_pending(Ja1World *w, const Ja1Host *h);         /* remove every merc with b19D = 1 */
 int32_t ja1_aim_pay(Ja1World *w, const Ja1Host *h);  /* the charge paid: arrivals, funds, link, b19D, hirings; n */

@@ -30,6 +30,35 @@ def lib():
     return _lib
 
 
+def fan_fixes(mask=None):
+    """#70: set the port's fan_fixes mask (bit nn-1 = fix Fnn, F01..F128; 0 = 1.13b) when given; returns the mask in
+    force. The C side holds it as two 64-bit halves."""
+    L = lib()
+    L.ja1_fan_fixes_set.argtypes, L.ja1_fan_fixes_set.restype = [ctypes.c_uint64], None
+    L.ja1_fan_fixes_set_hi.argtypes, L.ja1_fan_fixes_set_hi.restype = [ctypes.c_uint64], None
+    L.ja1_fan_fixes.argtypes, L.ja1_fan_fixes.restype = [], ctypes.c_uint64
+    L.ja1_fan_fixes_hi.argtypes, L.ja1_fan_fixes_hi.restype = [], ctypes.c_uint64
+    if mask is not None:
+        L.ja1_fan_fixes_set(mask & FAN_HALF)
+        L.ja1_fan_fixes_set_hi((mask >> 64) & FAN_HALF)
+    return L.ja1_fan_fixes() | L.ja1_fan_fixes_hi() << 64
+
+
+def port_fixes(mask=None):
+    """#71: set the port fix mask (bit nn-1 = fix Pnn, P01..P64; 0 = no port fix) when given; returns the mask in
+    force. Level `all` = every F id (fan_fixes) + every P id."""
+    L = lib()
+    L.ja1_port_fixes_set.argtypes, L.ja1_port_fixes_set.restype = [ctypes.c_uint64], None
+    L.ja1_port_fixes.argtypes, L.ja1_port_fixes.restype = [], ctypes.c_uint64
+    if mask is not None:
+        L.ja1_port_fixes_set(mask & FAN_HALF)
+    return L.ja1_port_fixes()
+
+
+FAN_HALF = (1 << 64) - 1
+FAN_ALL = (1 << 128) - 1    # fan_fixes "all" = F01..F128
+
+
 def _u8(b):
     return (ctypes.c_uint8 * len(b)).from_buffer_copy(bytes(b))
 
@@ -241,7 +270,8 @@ OPS.update({329: "enemy_walk_in"})   # strategic.md Enemy moves
 OPS.update({330: "home_lost_msg", 331: "rating_word"})   # strategic.md The day's verdict
 OPS.update({337: "aim_remark", 338: "aim_removed"})
 OPS.update({340: "w_72568", 341: "w_19eb0", 342: "w_35774", 343: "w_3c16c", 344: "w_54ec8", 345: "disarm_ask", 346: "ground_item_reset", 347: "menu_redraw", 348: "walter_say", 349: "inv_open", 350: "mouse_to", 351: "wait_up", 352: "weapon_cursor"})   # panel.md Clicks on the bottom strip   # combat.md Springing a ground item   # strategic.md The A.I.M. screen
-OPS.update({353: "replay_count", 354: "replay_record", 355: "replay_anim", 356: "replay_draw"})   # strategic.md The day replay
+OPS.update({353: "replay_count", 354: "replay_record", 355: "replay_anim", 356: "replay_draw"})
+OPS.update({357: "w_3f578", 358: "effect_pass", 359: "effect_hit"})   # #70 F15 SlideViewToTile? (turns.rs enemies_turn)   # strategic.md The day replay
 OPS.update({332: "battle_ui", 333: "battle_wait", 334: "battle_box", 335: "battle_msg", 336: "explode_art"})   # strategic.md Sector battles
 CRIES = ("BAD", "GOOD", "EMPTY", "NOTHING", "HMM")     # op 100 cry: number -> the text the original passes
 # ai_diff decider name -> (C entry point, number of extra int arguments; "out16" = a u16 output pointer)
@@ -294,7 +324,7 @@ AI_ENTRY = {"think": ("ja1_ai_tick", False), "update_alert": ("ja1_ai_update_ale
             "sight_check": ("ja1_sight_check", 1), "update_sightings": ("ja1_perceive", 1),
             "share_sightings": ("ja1_share_sightings", 1), "enemy_turned": ("ja1_enemy_turned", False),
             "guard_turned": ("ja1_guard_turned", False),
-            "deselect": ("ja1_deselect", 1), "teleport": ("ja1_teleport", 1), "debug_heal": ("ja1_debug_heal", 0), "knockdown_anim": ("ja1_knockdown_anim", 2)}   # ai.md Sightings as steps   # ai.md Hearing a noise, Noise interrupt   # click.md   # shooting.md   # turns.md   # soldier_update.md     # sector_value: the "slot" argument is the sector   # QueueTwoAnims 0x17F5C (op 181): next, cur
+            "deselect": ("ja1_deselect", 1), "teleport": ("ja1_teleport", 1), "debug_heal": ("ja1_debug_heal", 0), "max_ap": ("ja1_max_ap", False), "melee_chance": ("ja1_melee_chance", 2), "throw_chance": ("ja1_throw_chance", 2), "knockdown_anim": ("ja1_knockdown_anim", 2)}   # ai.md Sightings as steps   # ai.md Hearing a noise, Noise interrupt   # click.md   # shooting.md   # turns.md   # soldier_update.md     # sector_value: the "slot" argument is the sector   # QueueTwoAnims 0x17F5C (op 181): next, cur
 
 
 VOID_ENTRY = ("deselect", "teleport", "debug_heal", "use_on_tile", "think", "swap_hand", "update_alert", "anim_delay", "anim_step", "anim_end", "merc_view", "set_anim", "anim_frame", "anim_turn", "xra_enemy",
@@ -390,7 +420,7 @@ SECTOR_ENTRY = {"mission_blast": ("ja1_mission_blast", [_I]), "call_enemies": ("
                 "resolve_battle": ("ja1_resolve_battle", [_I] * 2), "sector_gained": ("ja1_sector_gained", [_I]),   # Sector battles
                 "stat_practice": ("ja1_stat_practice", [_I] * 4),   # combat.md Stat practice
                 "blast": ("ja1_blast", [_I] * 3), "blast_tile": ("ja1_blast_tile", [_I] * 4), "gas_tick": ("ja1_gas_tick", []),   # combat.md Blast, exact steps
-                "sector_tick": ("ja1_sector_tick", []), "explode": ("ja1_explode", [_I] * 4), "effect_hit": ("ja1_effect_hit", [_I] * 3), "explode_dat": ("ja1_explode_dat", [_I] * 2),   # combat.md Explosion, exact steps
+                "sector_tick": ("ja1_sector_tick", []), "explode": ("ja1_explode", [_I] * 4), "effect_hit": ("ja1_effect_hit", [_I] * 3), "effect_pass": ("ja1_effect_pass", [_I]), "explode_dat": ("ja1_explode_dat", [_I] * 2),   # combat.md Explosion, exact steps
                 "kept_turn": ("ja1_kept_turn_start", []), "end_turn": ("ja1_end_turn", []), "first_merc": ("ja1_first_merc", []), "escape_stop": ("ja1_escape_stop", []), "next_merc": ("ja1_next_merc", [_I]), "next_enemy": ("ja1_next_enemy", [_I]), "swap_places": ("ja1_swap_places", [_I, _I]),
                 "turn_sightings": ("ja1_turn_sightings", [_I]), "itq_pop": ("ja1_itq_pop", []),
                 "enemies_turn": ("ja1_enemies_turn", []), "mercs_turn": ("ja1_mercs_turn", []),
@@ -448,10 +478,10 @@ SECTOR_ENTRY = {"mission_blast": ("ja1_mission_blast", [_I]), "call_enemies": ("
                 "guard_click": ("ja1_guard_click", [u8p] + [_I] * 3), "guard_exit": ("ja1_guard_exit", [u8p]),   # The guard
                 "guard_close": ("ja1_guard_close", [u8p]),                                                       # screen
                 "sight_line": ("ja1_sight_line", [_I] * 9),   # ai.md Sight line (library op 49)
-                "aim_refusal": ("ja1_aim_refusal", [_I]), "aim_hire": ("ja1_aim_hire", [_I]),   # strategic.md
+                "aim_refusal": ("ja1_aim_refusal", [_I]), "aim_refusal_rule": ("ja1_aim_refusal_rule", [_I]), "aim_hire": ("ja1_aim_hire", [_I]),   # strategic.md
                 "aim_cancel_pending": ("ja1_aim_cancel_pending", []), "aim_browse": ("ja1_aim_browse", [_I, _I]),   # The A.I.M. screen
                 "aim_open": ("ja1_aim_open", []), "aim_pay": ("ja1_aim_pay", [])}
-SECTOR_INT = ("disarm", "day_end", "mine_spotted", "effect_start", "traverse_edge", "traverse_check", "traverse", "traverse_in", "aim_refusal", "performance_rating", "aim_hire", "aim_browse", "aim_open", "aim_pay", "day_verdict", "edge_tile", "guard_enter", "enemy_walk_in", "enemy_pick", "enemy_move", "cash_count", "merc_join", "sight_line", "door_lookup", "reload", "loop_rest", "loop_head", "leave_tests", "select_merc", "select_soldier", "on_screen", "hit_test", "first_merc", "itq_pop", "new_turn", "frame", "guard_tile", "tile_patch", "item_patch", "tmp_file", "radio_result", "quest_check", "action_ap", "shot_ap", "inventory_screen", "connected_home", "payday_dialog", "morning", "map_click", "day_start", "day_clock", "guard_open", "guard_hover", "guard_click", "guard_exit")      # entry points with an int32 result
+SECTOR_INT = ("disarm", "day_end", "mine_spotted", "effect_start", "traverse_edge", "traverse_check", "traverse", "traverse_in", "aim_refusal", "aim_refusal_rule", "performance_rating", "aim_hire", "aim_browse", "aim_open", "aim_pay", "day_verdict", "edge_tile", "guard_enter", "enemy_walk_in", "enemy_pick", "enemy_move", "cash_count", "merc_join", "sight_line", "door_lookup", "reload", "loop_rest", "loop_head", "leave_tests", "select_merc", "select_soldier", "on_screen", "hit_test", "first_merc", "itq_pop", "new_turn", "frame", "guard_tile", "tile_patch", "item_patch", "tmp_file", "radio_result", "quest_check", "action_ap", "shot_ap", "inventory_screen", "connected_home", "payday_dialog", "morning", "map_click", "day_start", "day_clock", "guard_open", "guard_hover", "guard_click", "guard_exit")      # entry points with an int32 result
 
 
 def sector_run(name, bufs, scalars, args, random, call=None, host_ops=ALL_OPS, sync=False):
@@ -690,7 +720,7 @@ def world_load(e, ai, bufs=None, scalars=None):
     return bufs, scalars
 
 
-READ_ONLY = ("view_rays", "obj_block", "fx_anims", "splash", "equip_skill", "attach", "item_types", "anim_table", "anim_rows", "anim_scripts", "anim_free", "anim_sounds", "anim_steps_tile", "anim_turn_while", "fresher", "dir_steps", "t0_class", "t1_class", "t2_class", "listed", "crates", "fixed_items",
+READ_ONLY = ("view_rays", "obj_block", "splash", "equip_skill", "attach", "item_types", "anim_table", "anim_rows", "anim_scripts", "anim_free", "anim_sounds", "anim_steps_tile", "anim_turn_while", "fresher", "dir_steps", "t0_class", "t1_class", "t2_class", "listed", "crates", "fixed_items",
              "weapons", "absorb", "silencer", "shot_sound", "impact_noise", "shot_range", "posture", "window", "attack_sound", "diff_mod", "item_rects", "slot_rects", "no_break")
 
 

@@ -234,7 +234,9 @@ impl Ai {
             return 0;
         }
         // 4.
-        if self.tb(t, 5) & 0x80 != 0 && self.rd8(ITEM3_TYPE) != 0x28 {
+        // Fan fix F43 (#70 row 93; 1.15m CanStandAt 0x725FB -> tail 0x8AD6D): the gas mask needs condition >= 10.
+        let mask = self.rd8(ITEM3_TYPE) == 0x28 && (!crate::fanfix::on(43) || self.rd8(ITEM3_TYPE + 2) as i8 >= 10);
+        if self.tb(t, 5) & 0x80 != 0 && !mask {
             return 0;
         }
         // 5.

@@ -1,6 +1,8 @@
 """Differential test: the guard screen of tactical key M (strategic.md "The guard screen"), original vs port.
 
-usage: .venv/bin/python validate/diff/guard_diff.py [ncases=1500] [DUMP] [--port] [--lib SO] [-v]   (GUARD_SEED=n)
+usage: .venv/bin/python validate/diff/guard_diff.py [ncases=1500] [DUMP] [--port] [--lib SO] [-v] [--fan IDS]   (GUARD_SEED=n)
+--fan IDS (with --port; #70): the original runs the fan patch 1.15m code (Emu.put_115m), the port runs with the fan
+fixes IDS on (`all` or `F05`); the run must see the 1.15m refusal (msg 18 at a send) at least once.
 The original: GuardAssignScreen? 0x427B4 runs whole in Unicorn on tac60 with a frame script. The in-loop MousePoll
 0x678E8 (return 0x42918) starts the next pass: mouse x / y 0x229D00 / 0x229D04, buttons 0x229CF4, g_ctrlHeld
 0x284F1F; MapKeyHandler? 0x426D0 = the exit key (Enter), 0x67CD8 = the start button; the run stops when the script
@@ -28,7 +30,13 @@ from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_ESP, UC_X86_REG_EBP, UC
 argv = sys.argv[1:]
 if "--lib" in argv:
     os.environ["JA1_PORT_LIB"] = argv[argv.index("--lib") + 1]
-args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] != "--lib")]
+args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] not in ("--lib", "--fan"))]
+FAN = None
+if "--fan" in argv:
+    v = argv[argv.index("--fan") + 1]
+    FAN = (1 << 128) - 1 if v == "all" else sum(1 << (int(x.strip()[1:]) - 1) for x in v.split(","))
+    if "--port" not in argv:
+        raise SystemExit("guard_diff: --fan needs --port")
 N = int(args[0]) if args else 1500
 DUMP = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_tac60.bin")
 PORT = "--port" in argv
@@ -46,6 +54,14 @@ if not os.path.exists(DUMP):
     print(f"guard_diff: {DUMP} missing")
     sys.exit(1)
 e = Emu(dump=DUMP, fast=True)
+if FAN is not None:
+    e.put_115m()
+if PORT:
+    port_lib.fan_fixes(FAN or 0)
+    FRONT.ja1_fan_fixes_set.argtypes = [ctypes.c_uint64]
+    FRONT.ja1_fan_fixes_set((FAN or 0) & ((1 << 64) - 1))
+    FRONT.ja1_fan_fixes_set_hi.argtypes = [ctypes.c_uint64]
+    FRONT.ja1_fan_fixes_set_hi((FAN or 0) >> 64)
 rt = e.rt
 e.stub_sprintf()
 st = {"ev": [], "j": 0, "log": [], "frame": None}
@@ -122,6 +138,10 @@ def undo_hook(uc, a, size, _):
 
 
 e.uc.hook_add(UC_HOOK_CODE, undo_hook, None, rt(0x4257C), rt(0x4257C))
+FAN_REFUSED = [0]
+if FAN is not None:      # 1.15m tail 0x8AED8: the send to a sector with guards on the way is refused (fan fix F05)
+    tail = 0x8AED8 + rt(0x10000) - 0x10000    # past obj1's vsize: obj1's delta (as Emu.put_115m)
+    e.uc.hook_add(UC_HOOK_CODE, lambda *_: FAN_REFUSED.__setitem__(0, FAN_REFUSED[0] + 1), None, tail, tail)
 e.uc.ctl_flush_tb()
 
 
@@ -348,10 +368,14 @@ def main():
     need = ("open", "closed", "close with moves", "travel", "replay", "dies", "msg 1", "msg 2", "msg 18", "msg 19",
             "msg 20", "undo", "undo chain") + (("limit over the map", "limit back") if PORT else ())
     missing = [k for k in need if not cover[k]]
+    if FAN is not None:
+        print(f"guard_diff: 1.15m refusals (F05) {FAN_REFUSED[0]}")
+        if not FAN_REFUSED[0]:
+            missing.append("1.15m refusal")
     if missing:
         print(f"guard_diff: never reached: {missing}")
         fails += 1
-    print(f"guard_diff{' (port)' if PORT else ''}: {N} cases, {fails} mismatches")
+    print(f"guard_diff{' (port)' if PORT else ''}{f' --fan {FAN:#x}' if FAN is not None else ''}: {N} cases, {fails} mismatches")
     sys.exit(1 if fails else 0)
 
 

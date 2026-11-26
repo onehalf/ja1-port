@@ -20,6 +20,9 @@ import datarc, pcx, common           # noqa: E402
 argv = sys.argv[1:]
 LIB = argv[argv.index("--lib") + 1] if "--lib" in argv else os.path.join(ROOT, "port", "ja1front", "target", "release",
                                                                          "libja1front.so")
+import pfix                          # noqa: E402  #71 --pfix 10: area 4 saved before area 5 on both sides
+PFIX = pfix.parse(argv)
+P10 = PFIX is not None and 10 in PFIX
 args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--lib")]
 ncases = int(args[0]) if args else 300
 dump = args[1] if len(args) > 1 else os.path.join(ROOT, "build", "mem_aim_hired.bin")
@@ -35,6 +38,15 @@ _w, _h, AIMSCRN, _ = pcx.decode(datarc.member(MAIN, "AIMSCRN.PCX"))
 assert (_w, _h) == (320, 200)
 SHOT = 64000
 e = Emu(dump=dump, fast=True)
+if PFIX is not None:
+
+    class _FrontFixes:                    # the port side is libja1front: its own copy of the fix masks
+        @staticmethod
+        def port_fixes(m):
+            if PORT:
+                PORT.ja1_port_fixes_set.argtypes = [ctypes.c_uint64]
+                PORT.ja1_port_fixes_set(m)
+    pfix.apply(e, PFIX, _FrontFixes)
 screen = e.r32(e.rt(0x95678))
 
 
@@ -96,8 +108,10 @@ for i in range(ncases):
     e.w8(e.rt(0x93EA8), 0)
     e.uc.mem_write(screen, bytes(AIMSCRN))
     e.call(e.rt(0x467E4), 2, 0x50, 0xF)       # the save areas of AimScreen's first picture
-    e.call(e.rt(0x467E4), 5, 0x10, 0x4E)
-    e.call(e.rt(0x467E4), 4, 0x118, 0xB9)     # after area 5, as ShowAimScreen: their back buffer rects share a row
+    # area 4 after area 5, as ShowAimScreen: their back buffer rects share a row (#2 row 46); P10 swaps the two saves
+    # (pfix.py patches the same order into ShowAimScreen 0x1FF2D)
+    for a in ((4, 0x118, 0xB9), (5, 0x10, 0x4E)) if P10 else ((5, 0x10, 0x4E), (4, 0x118, 0xB9)):
+        e.call(e.rt(0x467E4), *a)
     # the page turns while a tooltip of the last page is open (HideTooltip inside 0x21648) and with the modes that only
     # AimScreen writes as the old value: the port draws the whole screen again and must get the same pixels
     e.w8(e.rt(0x95F6C), i % 5)

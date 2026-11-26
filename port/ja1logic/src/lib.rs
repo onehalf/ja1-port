@@ -1,6 +1,7 @@
 //! ja1logic: clean-room port. Slice 1 (here): move codes, step AP, path search. Slice 2a: `ai` (enemy AI decisions).
 //! Slice 2b: `ai::search` (the search procedures, library ops of port_api.md).
 pub mod ai;
+pub mod fanfix;
 pub mod sector;
 pub mod trace;
 use std::panic::catch_unwind;
@@ -70,6 +71,30 @@ fn door_marks(obj: u8) -> &'static [u8] {
         0x41 | 0x60 | 0x43 | 0x45 | 0x62 | 0x64 => &[7, 8, 6, 3, 2],
         _ => &[],
     }
+}
+
+/// #70 F51: 1.15m cave 0x5A855 = MoveCode 0x2BE54 for the one tile, called where 1.13b runs RebuildMoveCodes
+/// 0x2E730 after a blue flag (object 0x86) is cleared: EffectHit? 0x173E5, ClearTileMarker86? 0x19D6C, TriggerItem?
+/// 0x1AE80 / 0x1AF42. Returns false when the fix is off (the caller rebuilds every tile then).
+pub(crate) fn flag_cleared_codes(w: *mut ai::Ja1World, tile: i32) -> bool {
+    if !fanfix::on(51) {
+        return false;
+    }
+    let w = unsafe { &mut *w };
+    // SPEC GAP: a null tiles, t0_class, t1_class or move_codes buffer, or a tile off the map, does nothing.
+    if w.tiles.is_null() || w.t0_class.is_null() || w.t1_class.is_null() || w.move_codes.is_null() || !(0..3136).contains(&tile) {
+        return true;
+    }
+    unsafe {
+        let (gc, oc) = (&*(w.t0_class as *const [u8; 256]), &*(w.t1_class as *const [u8; 256]));
+        let i = tile as usize;
+        let t = |k: usize| *w.tiles.add(8 * i + k);
+        let prev = u16::from_le_bytes([*w.move_codes.add(2 * i), *w.move_codes.add(2 * i + 1)]);
+        let [lo, hi] = move_code(t(0), t(1), t(3), prev, gc, oc).to_le_bytes();
+        *w.move_codes.add(2 * i) = lo;
+        *w.move_codes.add(2 * i + 1) = hi;
+    }
+    true
 }
 
 pub fn rebuild(tiles: &[u8], gc: &[u8; 256], oc: &[u8; 256], out: &mut [u16]) {

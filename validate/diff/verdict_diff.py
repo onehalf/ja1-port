@@ -12,6 +12,9 @@ Fuzzed: story bytes, item_told, the day accounts and day-start copies, deaths, s
 day (crate days 9, 17, 26, 31), the sector table, the five bytes R(S[0x17], 0x9F..0xA3), soldiers 0..7 (present,
 story items in pockets), difficulty 0..2, idle_day, team_on_duty, bonus.
 After the bonus: the day-end steps (DayEndScreen? 0x65F6C..0x65F88: 0x62304 and the first_hit count), "end" = its result.
+--fan (with --port): #70 fix F41 (guide bonus also into g_prevBalance) against the 1.15m code.
+--pfix 20 (#71, #2 row 62): the original with its four step-13 default jumps re-aimed (no remark for a capacity with
+no quote), the port with port fix P20 on.
 --port: ja1_day_end_accounts, ja1_day_verdict (+ ja1_day_bonus + ja1_day_end) on the same state; result, host log and world are compared. Exits 1 on any
 mismatch.
 """
@@ -25,6 +28,8 @@ import port_lib                      # noqa: E402
 from emu import Emu                  # noqa: E402
 
 argv = sys.argv[1:]
+import pfix                          # noqa: E402
+PFIX = pfix.parse(argv)
 if "--lib" in argv:
     os.environ["JA1_PORT_LIB"] = argv[argv.index("--lib") + 1]
 args = [a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or argv[i - 1] != "--lib")]
@@ -34,6 +39,9 @@ PORT = "--port" in argv
 port_lib.PAY = True                  # accounts, stash_counts
 port_lib.VERDICT = True              # story 43, item_told, start_*, bonus, idle_day
 VERBOSE = "-v" in argv
+FAN = "--fan" in argv   # #70 F41: the original runs the 1.15m TickGuideBonus? sites + helper 0x6233E, the port fix F41
+if FAN and not PORT:
+    raise SystemExit("verdict_diff: --fan needs --port")
 
 SOLDIERS, SECTORS, RECORDS = 0xFA958, ai.G_SECTOR_TBL9, ai.G_SECTORS
 STORY, ACC, PLANTS, STASH = 0x22A040, 0x229FA0, ai.G_PLANTS, ai.G_STASH_COUNTS
@@ -46,6 +54,11 @@ if not os.path.exists(DUMP):
     sys.exit(1)
 e = Emu(dump=DUMP, fast=True)
 rt = e.rt
+if FAN:
+    e.put_115m(only=[(0x61641, 0x61649), (0x6165C, 0x6166E), (0x6233E, 0x62356)])
+port_lib.fan_fixes((1 << 40) if FAN else 0)
+if PFIX:
+    pfix.apply(e, PFIX, port_lib)
 log, draws = [], []
 case = {"answers": []}
 rng = random.Random(7)
@@ -311,7 +324,7 @@ def main():
     if missing:
         print(f"verdict_diff: never reached: {missing}")
         fails += 1
-    print(f"verdict_diff{' (port)' if PORT else ''}: {N} cases, {fails} mismatches")
+    print(f"verdict_diff{' (port)' if PORT else ''}{' --fan 41' if FAN else ''}{' --pfix ' + ','.join(map(str, PFIX)) if PFIX else ''}: {N} cases, {fails} mismatches")
     sys.exit(1 if fails else 0)
 
 

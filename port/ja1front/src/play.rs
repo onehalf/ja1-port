@@ -65,6 +65,9 @@ pub struct PlayHost {
     /// selected soldier's stop clears the cursor tile 0x229D2C = 0xC41 (not with opt_onscreen 2+). Play clears its
     /// cursor tile; the portrait redraw is the front-end's whole-frame draw.
     pub marker_clear: bool,
+    /// The window: when the first message box in the inventory screen ended (ShowMessage? 0x27CCA Unlock? frees the
+    /// round lock that the screen's Lock?(0) took, so 1.13b time runs from there; #70 row 73).
+    pub inv_box_end: Option<std::time::Instant>,
     /// CursorModeSet? 0x1C438 came with host op 185 click_panel (slot, mode) of TacticalClick, SoldierDies and
     /// StoryFind: Play sets the cursor mode and runs MoveCursorState on that slot after the call.
     pub click_panel: Option<(i32, i32)>,
@@ -119,6 +122,9 @@ pub struct PlayHost {
     pub disarm_win: Option<Box<dyn FnMut(&[u8], u8, &[u8]) -> bool>>,
     /// Op 215 fade with no end-of-day screen open, in the window: FadePalette? 0x52908 on the tactical picture (steps, from, to).
     pub fade_win: Option<Box<dyn FnMut(i32, i32, i32)>>,
+    /// Fan fix F28 (#70 row 17): the leave path's op 215 fade (steps, from, to) came after battle show steps of the
+    /// same pass; the show plays lit first, then this fade runs.
+    pub fade_held: Option<(i32, i32, i32)>,
     /// StoryFind 0x6179C runs inside one pass, and the original waits inside each quote: the window shows what the scene queued
     /// so far (merc balloons, Brenda) and redraws the picture, at each Brenda quote and fade.
     pub scene_win: Option<Box<dyn FnMut()>>,
@@ -507,6 +513,8 @@ pub enum BattleEv {
     Wait(u32),
     /// Op 334 battle_box (s, enemies, guards, tappers, kind).
     Box(i32, u8, u8, u8, i32),
+    /// Op 332 k 9 (fan fix F27 only): the last key byte (0x95DC3) is cleared.
+    ClearKey,
 }
 
 /// The text of op 335 battle_msg (t, n) (strategic.md Sector battles); n = the sector number s + 1.
@@ -843,19 +851,12 @@ pub fn puff(fx: &mut [u8], a: &[i32]) -> i32 {
     k as i32
 }
 
-/// The effect records that hit now (combat.md The explosion effect record): entries in use with kind ≠ 0, count
-/// (s8) ≤ 0x13 and hit flag 0. Each gets its hit flag; returns (tile, kind, power) per entry.
-pub fn effect_hits(fx: &mut [u8]) -> Vec<(i32, i32, i32)> {
-    (1..FX_ANIM_COUNT).filter_map(|k| effect_hit_entry(fx, k)).collect()
-}
-
-/// Entry k of `effect_hits`: (tile, kind, power) when it hits now (its hit flag is set), else None.
-pub fn effect_hit_entry(fx: &mut [u8], k: usize) -> Option<(i32, i32, i32)> {
-    let e = fx.get_mut(k * FX_REC..(k + 1) * FX_REC)?;
-    if e[0] == 0 || e[0xB] == 0 || e[0] as i8 > 0x13 || e[0x10] != 0 {
+/// Entry k hits in a pass with count limit `limit` (blast.rs effect_pass): (tile, kind, power), the flag unchanged.
+pub fn effect_hit_due(fx: &[u8], k: usize, limit: i8) -> Option<(i32, i32, i32)> {
+    let e = fx.get(k * FX_REC..(k + 1) * FX_REC)?;
+    if e[0] == 0 || e[0xB] == 0 || e[0] as i8 > limit || e[0x10] != 0 {
         return None;
     }
-    e[0x10] = 1;
     Some((i16::from_le_bytes([e[9], e[10]]) as i32, e[0xB] as i8 as i32, e[0x11] as i8 as i32))
 }
 
@@ -1155,6 +1156,7 @@ impl PlayHost {
             marker: None,
             cursor_reset: false,
             marker_clear: false,
+            inv_box_end: None,
             click_panel: None,
             pal_rot: Vec::new(),
             world: std::ptr::null_mut(),
@@ -1244,6 +1246,7 @@ impl PlayHost {
             disarm_answers: Default::default(),
             disarm_win: None,
             fade_win: None,
+            fade_held: None,
             scene_win: None,
             balloon_win: None,
             balloon_owed: (0, 0),
@@ -1371,7 +1374,7 @@ unsafe fn pay_op(host: &mut PlayHost, op: i32, args: *const i32, nargs: i32) -> 
         }
         277 => {
             let (k, x0, p) = (arg(0), arg(1), host.pay_quote);
-            let sub = !host.world.is_null() && (*host.world).opt_step_text != 0;
+            let sub = !host.world.is_null() && crate::ctlpanel::sub_byte((*host.world).opt_step_text);
             host.pay_said.push((k, x0, p));
             if let Some(f) = host.pay_say.as_mut() {
                 f(k, x0, p, sub);
@@ -1567,19 +1570,43 @@ fn put_marker(st: &mut crate::cursor::CursorState, lines: &mut Vec<String>, kind
 /// # Safety
 /// `w` points to a bound world whose `soldiers` and `held` buffers are valid.
 pub unsafe fn cursor_back_raw(w: *mut Ja1World) -> bool {
+    cursor_back_host(w, std::ptr::null())
+}
+
+/// cursor_back_raw with the host. Port fix P22 (#2 row 64): when the shown strip entry holds an item, the held item goes to
+/// the first empty entry in the strip order (a vest pocket only when the merc has it), else to the ground under the merc
+/// (the inventory screen's put-down: b6 2). Without a host (`h` null) the ground step is left out (the old copy).
+///
+/// # Safety
+/// As cursor_back_raw; `h` is null or a valid host.
+pub unsafe fn cursor_back_host(w: *mut Ja1World, h: *const Ja1Host) -> bool {
     const SHOWN: [usize; 7] = [0, 7, 8, 9, 10, 11, 1];
+    let wp = w;
     let w = &mut *w;
     // CursorItemBack? 0x53660: first 0x92DCC. In the enemies' turn the screen is off: the item stays on the cursor.
     if w.screen_drawn == 0 || w.cursor_drop == 0 || w.held.is_null() || w.soldiers.is_null() || *w.held == 0 || w.selected >= 0x30 {
         return false;
     }
-    let e = SHOWN[(w.strip_box as usize).min(6)];
-    let dst = w.soldiers.add(0x200 * w.selected as usize + 12 * e);
-    std::ptr::copy_nonoverlapping(w.held, dst, 12);
+    let mut e = SHOWN[(w.strip_box as usize).min(6)];
+    let rec = w.soldiers.add(0x200 * w.selected as usize);
+    let mut ground = false;
+    if ja1logic::fanfix::port_on(22) && *rec.add(12 * e) != 0 {
+        let r = std::slice::from_raw_parts(rec, 0x200);
+        match SHOWN.iter().find(|&&k| r[12 * k] == 0 && !crate::invdraw::pocket_missing(r, k)) {
+            Some(&k) => e = k,
+            None => ground = !h.is_null(),
+        }
+    }
+    if ground {
+        let tile = i16::from_le_bytes([*rec.add(0x114), *rec.add(0x115)]) as i32;
+        ja1_put_item(wp, h, tile, w.held, 2, 0, 0, 0);
+    } else {
+        std::ptr::copy_nonoverlapping(w.held, rec.add(12 * e), 12);
+    }
     std::ptr::write_bytes(w.held, 0, 12);
     w.drop_answer = 0;
     w.cursor_drop = 0;
-    eprintln!("cursor back slot {} entry {}", w.selected, e);
+    eprintln!("cursor back slot {} {}", w.selected, if ground { "ground".to_string() } else { format!("entry {}", e) });
     true
 }
 
@@ -1647,7 +1674,7 @@ unsafe extern "C" fn cb_call(ctx: *mut c_void, op: i32, args: *const i32, nargs:
             let rec = std::slice::from_raw_parts((*w).soldiers.add(a[0] as usize * 512), 512);
             let (m, q, first) = say_args(op, a);
             let say = MercSay { k: a[0], x0: rec[0x17A] as i32 * 0x25 + 0xB, p: rec[0x179] as i32, m, q, first,
-                                sub: (*w).opt_step_text != 0 };
+                                sub: crate::ctlpanel::sub_byte((*w).opt_step_text) };
             if matches!(op, 289 | 296) && !(*w).text_buf.is_null() && !(*w).profiles.is_null() && ((0..64).contains(&m) || op == 296) {
                 // 0x448A8 encodes its stack name: empty for the reasons 1..4.
                 let nick: &[u8] = if m < 0 { &[] } else { std::slice::from_raw_parts((*w).profiles.add(m as usize * 0x5A), 10) };
@@ -1727,7 +1754,8 @@ unsafe extern "C" fn cb_call(ctx: *mut c_void, op: i32, args: *const i32, nargs:
         let host = &mut *(ctx as *mut PlayHost);
         host.call(op);
         if !host.world.is_null() {
-            cursor_back_raw(host.world);
+            let h = Ja1Host { ctx, random: cb_random, call: cb_call, host_ops: 0 };
+            cursor_back_host(host.world, &h);
         }
         return 0;
     }
@@ -1888,7 +1916,11 @@ unsafe extern "C" fn cb_call(ctx: *mut c_void, op: i32, args: *const i32, nargs:
         if op == 215 {
             scene_show(ctx as *mut PlayHost);
         }
-        if let (215, Some(f), [_, n, from, to, ..]) = (op, (*(ctx as *mut PlayHost)).fade_win.as_mut(), a) {
+        let host = &mut *(ctx as *mut PlayHost);
+        if let (215, true, [_, n, from, to, ..]) = (op, ja1logic::fanfix::on(28) && !host.battle_show.is_empty(), a) {
+            // Fan fix F28: the battle show of the leave cleanup came first; it plays lit after the pass, then the fade.
+            host.fade_held = Some((*n, *from, *to));
+        } else if let (215, Some(f), [_, n, from, to, ..]) = (op, host.fade_win.as_mut(), a) {
             f(*n, *from, *to);
         }
     }
@@ -2250,14 +2282,27 @@ unsafe extern "C" fn cb_call(ctx: *mut c_void, op: i32, args: *const i32, nargs:
         crate::focus::focus_world((*(ctx as *mut PlayHost)).world, a[0], a[1]);
         return 0;
     }
-    // Op 205 tile_anim (tile, kind): the front-end's animation timers start a water ripple (Update end step 2).
+    // Op 357 slide_view (tile): fan fix F15 slides the view to a down enemy that bled (EnemiesTurn? step 6).
+    if op == 357 && !args.is_null() && nargs >= 1 {
+        crate::focus::slide_world((*(ctx as *mut PlayHost)).world, *args);
+        return 0;
+    }
+    // Op 205 tile_anim (tile, kind): the front-end's animation timers start a water ripple (kind 0, Update end
+    // step 2) or a fire (kind 1, effect_pass).
     if op == 205 && !args.is_null() && nargs >= 2 {
         let host = &mut *(ctx as *mut PlayHost);
         let a = std::slice::from_raw_parts(args, 2);
         let w = host.world;
         if !w.is_null() && !(*w).tiles.is_null() {
             let tiles = std::slice::from_raw_parts_mut((*w).tiles, crate::world::size::TILES);
-            host.anims.start(a[0], a[1], tiles);
+            if a[1] == 1 {
+                // effect_pass: the fire of a kind-3 record (DrawProjectilePass? 0x1769B StartTileAnim table 0x9562E).
+                if host.anims.start_table(a[0], FIRE_FRAMES, FIRE_TABLE_COUNT, tiles).is_some() {
+                    eprintln!("fire {}", a[0]);
+                }
+            } else {
+                host.anims.start(a[0], a[1], tiles);
+            }
         }
         return 0;
     }
@@ -2339,7 +2384,7 @@ unsafe extern "C" fn cb_call(ctx: *mut c_void, op: i32, args: *const i32, nargs:
         let host = &mut *(ctx as *mut PlayHost);
         let w = host.world;
         if !w.is_null() {
-            crate::strips::stop_walk(*args as u8, *args.add(1) as u8, (*w).combat, (*w).selected, &mut (*w).view_hold, &mut (*w).turn_shown);
+            crate::strips::stop_walk(*args as u8, *args.add(1), (*w).combat, (*w).selected, &mut (*w).view_hold, &mut (*w).turn_shown);
         }
         return 0;
     }
@@ -2423,6 +2468,7 @@ unsafe extern "C" fn cb_call(ctx: *mut c_void, op: i32, args: *const i32, nargs:
             (332, 4) => Some(BattleEv::Sound(format!("MINE{}.8", arg(1)))),
             (332, 5) => Some(BattleEv::WaitSound),
             (332, 6) => Some(BattleEv::Stop),
+            (332, 9) => Some(BattleEv::ClearKey),
             (332, _) => None,
             (333, ms) => Some(BattleEv::Wait(ms.max(0) as u32)),
             _ => Some(BattleEv::Box(arg(0), arg(1) as u8, arg(2) as u8, arg(3) as u8, arg(4))),
@@ -2545,6 +2591,7 @@ extern "C" {
     fn ja1_merc_join(w: *mut Ja1World, h: *const Ja1Host, profile: i32) -> i32;
     fn ja1_stat_practice(w: *mut Ja1World, h: *const Ja1Host, slot: i32, stat: i32, n: i32, flag: i32);
     fn ja1_effect_hit(w: *mut Ja1World, h: *const Ja1Host, tile: i32, kind: i32, power: i32);
+    fn ja1_effect_pass(w: *mut Ja1World, h: *const Ja1Host, limit: i32);
     fn ja1_explode(w: *mut Ja1World, h: *const Ja1Host, thrower: i32, tile: i32, kind: i32, hit: i32);
     fn ja1_put_item(w: *mut Ja1World, h: *const Ja1Host, tile: i32, item: *const u8, b6: i32, exact: i32, note: i32,
                     near: i32);
@@ -2684,7 +2731,9 @@ impl<'a> Session<'a> {
         let o = if (0..3136).contains(&t) { self.w.tiles[8 * t as usize + 5] & 0x7F } else { 0x40 };
         let k = self.w.selected as usize;
         let hp = if k < 48 { self.w.soldiers[k * 512 + 0x183] as i8 as i32 } else { 0 };
-        crate::viewmode::press_walks(o, hp)
+        // SPEC GAP: occupants 0x30..0x3F / 0x80.. have no record here; read their visible byte as 0 (walk, as 1.13b).
+        let vis = if (o as usize) < 48 { self.w.soldiers[o as usize * 512 + 0x9C] as i8 as i32 } else { 0 };
+        crate::viewmode::press_walks(o, hp, vis)
     }
 
     /// One cursor.md "Clicks" press at tile `t` (left, or right when `right`: the hold starts, mouse y = `y`).
@@ -2850,38 +2899,27 @@ impl<'a> Session<'a> {
         unsafe { ja1_frame(&mut self.cw, &self.h) }
     }
 
-    /// The explosion effect records that hit at this frame call `ja1_effect_hit` (combat.md The explosion effect
-    /// record).
+    /// The explosion effect records of this frame: `ja1_effect_pass` (blast.rs effect_pass, DrawProjectilePass?
+    /// 0x17548; view mode 0 = OverviewRedraw's copy with limit 0x16). The hit, the fire (op 205 kind 1) and the
+    /// fire sound run in the library; the log names the records that hit at this level (not the ones a merc death
+    /// re-hits inside the pass, #70 row 30).
     pub fn effect_hits(&mut self) {
+        let limit = if self.w.opt_onscreen == 0 { 0x16 } else { 0x13 };
         // SAFETY: fx_anims points into `w`'s buffer, which keeps its size; no library call runs while it is read.
-        // Entry by entry: the hit, then the fire (combat.md "Drawing the effect records"; the sound is not played).
-        for k in 1..FX_ANIM_COUNT {
-            let hit = unsafe {
-                let fx = std::slice::from_raw_parts_mut(self.cw.fx_anims as *mut u8, self.w.fx_anims.len());
-                effect_hit_entry(fx, k)
-            };
-            if let Some((t, kind, power)) = hit {
-                eprintln!("effect_hit {} {} {}", t, kind, power);
-                // SAFETY: as in move_order.
-                self.bind();
-                unsafe { ja1_effect_hit(&mut self.cw, &self.h, t, kind, power) }
-            }
-            // SAFETY: as in tick (no library call runs now).
-            unsafe {
-                let host = &mut *(self.h.ctx as *mut PlayHost);
-                let tiles = std::slice::from_raw_parts_mut(self.cw.tiles, self.w.tiles.len());
-                let fx = std::slice::from_raw_parts(self.cw.fx_anims, self.w.fx_anims.len());
-                if let Some(t) = fire_tile(fx, k, tiles) {
-                    if host.anims.start_table(t, FIRE_FRAMES, FIRE_TABLE_COUNT, tiles).is_some() {
-                        eprintln!("fire {}", t);
-                    }
-                    // combat.md: the fire sound plays also when no tile animation was free (0x176AF follows
-                    // StartTileAnim with no test): effect 0x1D (FIR), 5 times.
-                    eprintln!("fire sound");
-                    host.sound.op(60, &[0x1D, 0x2B11, 0x32, 5], &[]);
-                }
-                self.w.tile_frames = host.anims.sprite_frames();
-            }
+        let hits: Vec<(i32, i32, i32)> = unsafe {
+            let fx = std::slice::from_raw_parts(self.cw.fx_anims, self.w.fx_anims.len());
+            (1..FX_ANIM_COUNT).filter_map(|k| effect_hit_due(fx, k, limit)).collect()
+        };
+        for (t, kind, power) in hits {
+            eprintln!("effect_hit {} {} {}", t, kind, power);
+        }
+        // SAFETY: as in move_order.
+        self.bind();
+        unsafe { ja1_effect_pass(&mut self.cw, &self.h, limit as i32) }
+        // SAFETY: as in tick (no library call runs now).
+        unsafe {
+            let host = &mut *(self.h.ctx as *mut PlayHost);
+            self.w.tile_frames = host.anims.sprite_frames();
         }
     }
 
@@ -3216,7 +3254,7 @@ impl<'a> Session<'a> {
     pub fn cursor_back(&mut self) -> bool {
         self.bind();
         // SAFETY: as in move_order.
-        unsafe { cursor_back_raw(&mut self.cw) }
+        unsafe { cursor_back_host(&mut self.cw, &self.h) }
     }
 
     /// select.md "Hide path marks" (`force`).
@@ -3879,8 +3917,12 @@ pub struct Play {
     /// In a hold with the mouse off the map the frames do not show a held item (HideMouse? 0x67368).
     pub held_off: bool,
     /// The mouse left the window (the window sets it; a DOS mouse never leaves the screen, so a mouse outside the
-    /// window does not scroll the view at its last edge point).
+    /// window does not scroll the view at its last edge point, unless `edge_out` gives an edge point).
     pub mouse_out: bool,
+    /// Port option (2026-11-25): the screen point at the window edge nearest to a released pointer outside the
+    /// focused window (the window sets it before each pass); with it the edge scroll goes on while `mouse_out`. Play
+    /// scripts never set it (the DOS rule above).
+    pub edge_out: Option<(i32, i32)>,
     /// The mouse point off the map, None = on the map (the window and the script line `face` set it).
     pub slot_pt: Option<(i32, i32)>,
     /// The mouse on the merc slots: its four bytes (0x92DC8, 0x93448, 0x92E58, 0x284F16).
@@ -4026,8 +4068,9 @@ impl Play {
             }
         }
         let mut v = crate::viewmode::from_world(w, self.mouse_px);
-        if !self.mouse_out {
-            self.scroll.mouse_edge(&v, self.mouse_px.0, self.mouse_px.1);
+        let edge = if self.mouse_out { self.edge_out } else { Some(self.mouse_px) };
+        if let Some((x, y)) = edge {
+            self.scroll.mouse_edge(&v, x, y);
         }
         let (fast, alt_scroll) = (crate::ctlpanel::get(w, 2), crate::ctlpanel::get(w, 3));
         if self.scroll.pass(&mut v, &mut self.cursor.tile, key, fast, alt_scroll, self.shift_alt.1 as u8) {
@@ -4320,7 +4363,7 @@ impl Play {
     pub fn new(seed: u32) -> Play {
         Play { host: PlayHost::new(seed), quick_restored: false, left: false, leave_held: false, passes: 0, inv_blink: 0, inv_last: None, last_box: None, last_battle: None, last_battle_dark: false, stat_shown: None, ctl: None, ctl_log: None, last_balloon: None, last_santino: false, last_door_film: None, last_anim_popup: None, last_guide: None, day: Default::default(), files: None,
                keep_frame: false, frame_world: None, aborted: None, quick: None, traversed: None, moved: false, cursor: Default::default(), hover: Default::default(),
-               key_flags: 0, key_latches: Default::default(), mouse: None, mouse_held: false, hover_per_tick: 0, right_held: false, look_view: false, popup: None, last_popup: None, debug_msgs: Vec::new(), last_pages: None, again: false, last_again: false, ov: Default::default(), ov_jump: None, pause: Default::default(), mouse_px: (160, 100), held_off: false, mouse_out: false, slot_pt: None, slots: Default::default(), cont: 0x40, face_press: false, mouse_warp: None, drag: None, drag_value: None, drag_end: false, drag_tail_done: false, wait: None, shift_alt: (false, false), gv_t3: None, version: "", scroll: Default::default(), amap: None, gmap: None, amap_last: None }
+               key_flags: 0, key_latches: Default::default(), mouse: None, mouse_held: false, hover_per_tick: 0, right_held: false, look_view: false, popup: None, last_popup: None, debug_msgs: Vec::new(), last_pages: None, again: false, last_again: false, ov: Default::default(), ov_jump: None, pause: Default::default(), mouse_px: (160, 100), held_off: false, mouse_out: false, edge_out: None, slot_pt: None, slots: Default::default(), cont: 0x40, face_press: false, mouse_warp: None, drag: None, drag_value: None, drag_end: false, drag_tail_done: false, wait: None, shift_alt: (false, false), gv_t3: None, version: "", scroll: Default::default(), amap: None, gmap: None, amap_last: None }
     }
 
     /// Takes gv_t3 from JA.EXE (needed by the hover step).
@@ -4352,6 +4395,7 @@ impl Play {
         // +0x188 = 1, without key I's other tests; the screen shows the merc that picked up, also when another merc
         // is selected (CursorItemToSoldier 0x54EC8 passes its soldier on).
         let picked = pick_shows_info(std::mem::take(&mut self.host.pick_info), self.host.pick_inv);
+        let from_pick = self.host.pick_inv.is_some();
         let who = if let Some(k) = self.host.pick_inv.take() {
             let dead = w.soldiers.get(k as usize * crate::soldier::REC + 0x188).copied() == Some(1);
             if self.left || dead {
@@ -4374,8 +4418,16 @@ impl Play {
         let mut blink = self.inv_blink;
         let mut screen = InvScreen::new(iso, exe, tileset, faces, table0, &mut blink, input, who);
         screen.opt_info = crate::ctlpanel::get(w, 6) != 0;
-        screen.opt_sub = crate::ctlpanel::get(w, 5) != 0;
+        screen.opt_sub = crate::ctlpanel::subtitles(w);
+        // Fan fix F66 (#70 row 90; 1.15m CursorItemToSoldier? 0x54EE9 calls cave 0x2B6A1): the pick-up's screen runs
+        // with screen_drawn 0x92DCC = 1 and puts the old value back after, so a merc that an enemy interrupted in the
+        // pick-up sees the pointer (changelog 1.15 jan 08, found by DarzaR). 1.13b: the byte stays (0 in the
+        // enemies' turn: no pointer, invscreen::pointer_parts).
+        let drawn = w.update.screen_drawn;
+        w.update.screen_drawn = pick_screen_drawn(drawn, from_pick, ja1logic::fanfix::on(66));
+        screen.ready = w.update.screen_drawn != 0;
         let r = Session::new(w, &mut self.host).inventory(&mut screen, who, picked);
+        w.update.screen_drawn = drawn;
         // InvScreenRun? 0x54DD3 reloads the top strip when 0x92DDF < 2.
         crate::strips::inv_end_strip(w.opt_onscreen);
         self.inv_last = Some(screen.frame.clone());
@@ -4463,6 +4515,39 @@ impl Play {
         if box_end {
             self.cursor.tile = 0xC41;
         }
+    }
+
+    /// The time that the inventory screen stayed open (section 8 "Inventory screen", window): `locked` ticks, then
+    /// `open` ticks after the first message box in it.
+    /// 1.13b: UseInventoryItem? 0x53B06 Lock?(0) takes the round lock; a message box (ShowMessage? Lock? + Unlock?
+    /// 0x27CCA) frees it again because the screen's lock_owned 0x92DE2 is still set, so the rest of the screen's time
+    /// is plain time (fuses, turn timers); 0x54D0E Unlock? then does nothing.
+    /// Fan fix F65 (#70 row 73; 1.15m calls cave 0x42780 at both places instead, `xor byte [0x92DE1], 1`): the
+    /// screen sets round_lock2 for its time, so TacticalTimer? 0x5EEA4 does nothing (no fuse, turn or blink timer),
+    /// and the pause blink byte stays as it was (changelog 1.15l, found by DarzaR).
+    pub fn inv_ticks(&mut self, w: &mut World, locked: u64, open: u64) {
+        self.inv_ticks_with(w, locked, open, ja1logic::fanfix::on(65))
+    }
+
+    pub fn inv_ticks_with(&mut self, w: &mut World, locked: u64, open: u64, fan65: bool) {
+        if fan65 {
+            w.update.round_lock2 ^= 1;
+            let mut s = Session::new(w, &mut self.host);
+            timer_ticks(&mut s, &mut self.pause, &mut self.cursor, &mut self.scroll, &mut self.day.lines, locked + open);
+            drop(s);
+            w.update.round_lock2 ^= 1;
+            return;
+        }
+        let mut s = Session::new(w, &mut self.host);
+        s.lock(&mut self.pause, false);
+        timer_ticks(&mut s, &mut self.pause, &mut self.cursor, &mut self.scroll, &mut self.day.lines, locked);
+        if open > 0 {
+            // the box's Lock? (round lock already taken: no change) and Unlock? (lock_owned set: frees it)
+            s.lock(&mut self.pause, false);
+            s.unlock(&mut self.pause);
+            timer_ticks(&mut s, &mut self.pause, &mut self.cursor, &mut self.scroll, &mut self.day.lines, open);
+        }
+        s.unlock(&mut self.pause);
     }
 
     /// After a pass: the front-end's timers of `n` locked balloon ticks whose library Timer tick ran inside the
@@ -4810,6 +4895,12 @@ impl Play {
                     }
                 }
                 Input::Merc(k, alt) => {
+                    // #70 F60 (row 87): 1.15m TacticalKeyHandler 0x136B3..0x1377B call tail 0x8AEED: no merc
+                    // switch while an item is on the cursor (0x222B50 != 0), so it cannot move to another merc.
+                    if ja1logic::fanfix::on(60) && s.w.held[0] != 0 {
+                        self.day.lines.push(format!("merc key {} held", k));
+                        continue;
+                    }
                     choose_merc_slots(&mut s, &mut self.slots, k as usize, alt);
                     self.cont = self.slots.cont;
                 }
@@ -4839,6 +4930,11 @@ impl Play {
                             status = out.status.or(status);
                         }
                         (Some(Act::Select), _) => {
+                            // #70 F61 (row 87): 1.15m SlotMouse 0x11B24 calls cave 0x8AF04: CursorItemBack? 0x53660
+                            // puts a held item back into the old merc's box before SelectMerc? 0x1148C.
+                            if crate::slotmouse::cursor_back_first() {
+                                s.cursor_back();
+                            }
                             choose_merc_slots(&mut s, &mut self.slots, k as usize, alt);
                         }
                         _ => {}
@@ -5633,7 +5729,7 @@ pub fn run_script_part(w: &mut World, play: &mut Play, cmds: &[Cmd], inv: &mut d
         match c {
             Cmd::Day => {
                 let (m, d) = play.day_steps(w);
-                play.script_guide(w.update.opt_step_text != 0);
+                play.script_guide(crate::ctlpanel::sub_byte(w.update.opt_step_text));
                 if play.day.to_menu {
                     // Section 12: the office ended with Leave; no sunrise, no map.
                     play.day.lines.extend(play.host.office_lines.iter().cloned());
@@ -5733,13 +5829,13 @@ pub fn run_script_part(w: &mut World, play: &mut Play, cmds: &[Cmd], inv: &mut d
                 for _ in 0..*n {
                     play.pass(w, &[], 1);
                     play.slide_ticks(w, &crate::focus::take_slides());
-                    play.script_box(w.update.opt_step_text != 0);
+                    play.script_box(crate::ctlpanel::sub_byte(w.update.opt_step_text));
                 }
             }
             Cmd::Do(i) => {
                 play.pass(w, &[*i], 1);
                 play.slide_ticks(w, &crate::focus::take_slides());
-                play.script_box(w.update.opt_step_text != 0);
+                play.script_box(crate::ctlpanel::sub_byte(w.update.opt_step_text));
                 // cursor.md "Tile popups": `popup item T pic P count C`, `popup sign T sector N` or `popup none T`;
                 // the popup passes no game time.
                 if let Some((t, _)) = play.popup.take() {
@@ -5929,7 +6025,7 @@ pub fn run_script_part(w: &mut World, play: &mut Play, cmds: &[Cmd], inv: &mut d
                     let keys = [Input::Compress];
                     play.pass(w, if on { &[] } else { &keys }, 1);
                     play.slide_ticks(w, &crate::focus::take_slides());
-                    play.script_box(w.update.opt_step_text != 0);
+                    play.script_box(crate::ctlpanel::sub_byte(w.update.opt_step_text));
                 }
             }
             Cmd::Item(t, ty, c, b6) => Session::new(w, &mut play.host).put_ground(*t, *ty, *c, *b6),
@@ -6080,7 +6176,9 @@ impl Play {
         self.script_guide(sub);
         // strategic.md "The battle show": a script starts the sounds at once and keeps the last box (JA1_BATTLE_PNG).
         // After the Leave path (the screen faded out) the show is dark: the line `battle dark`.
-        if self.left && !self.host.battle_show.is_empty() {
+        // Fan fix F28: a fade held back for the show (fade_held) means the show was lit.
+        let dark = self.left && self.host.fade_held.take().is_none();
+        if dark && !self.host.battle_show.is_empty() {
             self.day.lines.push("battle dark".to_string());
         }
         for ev in std::mem::take(&mut self.host.battle_show) {
@@ -6090,7 +6188,7 @@ impl Play {
                 }
                 BattleEv::Box(s, e, g, t, k) => {
                     self.last_battle = Some((s, (e, g, t), k));
-                    self.last_battle_dark = self.left;
+                    self.last_battle_dark = dark;
                 }
                 _ => {}
             }
@@ -6195,6 +6293,16 @@ pub fn timer_ticks(s: &mut Session, pause: &mut crate::pause::Pause, cursor: &mu
 /// `timer_ticks`; `lib` = false leaves out the library's Timer tick (it ran inside the pass) but keeps the
 /// front-end's animation timers.
 #[allow(clippy::too_many_arguments)]
+/// screen_drawn 0x92DCC while the inventory screen runs: 1 for a pick-up's screen under fan fix F66 (cave 0x2B6A1),
+/// else as it was.
+pub fn pick_screen_drawn(drawn: u8, from_pick: bool, fan66: bool) -> u8 {
+    if from_pick && fan66 {
+        1
+    } else {
+        drawn
+    }
+}
+
 fn timer_ticks_in(s: &mut Session, pause: &mut crate::pause::Pause, cursor: &mut crate::cursor::CursorState,
                scroll: &mut crate::viewmode::Scroll, lines: &mut Vec<String>, n: u64, lib: Option<bool>) {
     // lib: Some(true) = the library's Timer tick (with the animation timers), Some(false) = the animation timers
@@ -6256,6 +6364,48 @@ mod tests {
         assert!(super::space_blocked(true, false, false, false));
         assert!(super::space_blocked(true, true, true, false));
         assert!(!super::space_blocked(true, true, false, false));
+    }
+
+    /// Fan fix F66 (#70 row 90): a pick-up's inventory screen in the enemies' turn (screen_drawn 0) shows the
+    /// pointer only with the fix; key I's screen and the screen of a pick-up in the player's turn stay as they were.
+    #[test]
+    fn fan66_pick_screen_shows_the_pointer() {
+        use crate::invscreen::pointer_parts;
+        assert_eq!(super::pick_screen_drawn(0, true, false), 0);
+        assert_eq!(super::pick_screen_drawn(0, true, true), 1);
+        assert_eq!(super::pick_screen_drawn(0, false, true), 0);
+        assert_eq!(super::pick_screen_drawn(1, true, false), 1);
+        // ShowMouse? does nothing with screen_drawn 0: no arrow, no held item
+        assert_eq!(pointer_parts(false, false), (false, false));
+        assert_eq!(pointer_parts(false, true), (false, false));
+        assert_eq!(pointer_parts(true, false), (true, false));
+        assert_eq!(pointer_parts(true, true), (false, true));
+    }
+
+    /// Fan fix F65 (#70 row 73): the inventory time runs with round_lock2 set (1.15m cave 0x42780), so the
+    /// timer does nothing: no Lock blink, the blink timer stays, round_lock2 is back at 0 after. 1.13b: Lock?(0)
+    /// sets the blink byte and the timer counts down from 800; after a box the round lock is free (open ticks).
+    #[test]
+    fn fan65_inventory_time_stops_the_timer() {
+        let (exe, jag, save) = crate::world::tests::files(&[]);
+        for (fan, open) in [(false, 0), (false, 10), (true, 0), (true, 10)] {
+            let mut w = World::from_files(&exe, &jag, &save).unwrap();
+            let mut p = Play::new(1);
+            (w.update.round_lock, w.update.round_lock2) = (0, 0);
+            (p.pause.blink, p.pause.blink_timer) = (false, 5);
+            w.update.busy_timer = 1000;
+            p.inv_ticks_with(&mut w, 30, open, fan);
+            // the busy timer runs only with the round lock free: the open ticks of 1.13b
+            assert_eq!(w.update.busy_timer, if fan { 1000 } else { 1000 - 10 * open as i32 });
+            assert_eq!((w.update.round_lock, w.update.round_lock2), (0, 0));
+            assert!(!p.pause.lock_owned);
+            if fan {
+                assert_eq!((p.pause.blink, p.pause.blink_timer), (false, 5));
+            } else {
+                // the box's Lock? sets the blink timer to 800 again
+                assert_eq!((p.pause.blink, p.pause.blink_timer), (true, 800 - 10 * if open > 0 { open } else { 30 } as i32));
+            }
+        }
     }
 
     /// Ledger row c2aea50:ja1front:17378: Show Paths off hides the shown path marks also while a path preview

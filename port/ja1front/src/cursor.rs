@@ -235,15 +235,26 @@ pub fn cursor_sprite(buf: &mut [u8], sprites: &[Vec<Px>], env: &mut CursorEnv, s
     }
 }
 
-/// cursor.md "Target mark"; `occupant` = tile byte 5 of the mouse tile.
-pub fn target_mark(buf: &mut [u8], sprites: &[Vec<Px>], env: &mut CursorEnv, st: &mut CursorState, occupant: u8) {
+/// cursor.md "Target mark"; `occupant` = tile byte 5 of the mouse tile, `occ_vis` = byte +0x9C (visible) of that soldier
+/// (read by fan fix F46 only; 0 when the tile has no soldier).
+pub fn target_mark(buf: &mut [u8], sprites: &[Vec<Px>], env: &mut CursorEnv, st: &mut CursorState, occupant: u8,
+                   occ_vis: u8) {
     if st.over_map == 0 || st.tactical_on == 0 {
         return;
     }
     if !((0x8E..=0x91).contains(&st.value) || st.value == 0xA4) {
         return;
     }
-    if occupant & 0x7F < 0x30 {
+    // F46 (1.15l changelog, "finding enemies by the interface alone", found by DarzaR; 1.15m DrawTargetMark?
+    // 0x16E15 -> helper 0x2C57E): the mark shows only on a soldier whose visible byte +0x9C is above 0 (signed), so the
+    // cursor no longer finds a soldier the mercs do not see. SPEC GAP: slots 0x30..0x3F (the original reads past
+    // the soldier table there) do not occur in the port: they count as no soldier.
+    let shown = if ja1logic::fanfix::on(46) {
+        occupant & 0x7F < 0x30 && occ_vis as i8 > 0
+    } else {
+        occupant & 0x7F < 0x30
+    };
+    if shown {
         cursor_sprite(buf, sprites, env, st, 0, 0);
     } else {
         st.under_soldier = 1;
@@ -1205,6 +1216,8 @@ pub enum LibCall {
     ClickDetector { slot: i32, tile: i32 },
     Reload { slot: i32 },
     Select { slot: i32, force: i32, quote: i32 },
+    /// CursorItemBack? 0x53660 (host op 85; #70 F61: 1.15m runs it before these SelectMerc? calls).
+    CursorBack,
     /// `walk` = Some(walk AP): `ja1_move_confirmed` after a confirm click; None: `ja1_move_order`.
     Move { slot: i32, tile: i32, marker: i32, sneak: i32, b177: i32, alt: i32, walk: Option<i32>, squad: i32 },
     Gate { slot: i32, tile: i32 },
@@ -1299,6 +1312,7 @@ impl<'a> Hover<'a> {
                 LibCall::ClickDetector { slot, tile } => ja1_click_detector(self.w, self.h, slot, tile),
                 LibCall::Reload { slot } => ja1_reload(self.w, self.h, slot),
                 LibCall::Select { slot, force, quote } => ja1_select_merc(self.w, self.h, slot, force, quote),
+                LibCall::CursorBack => crate::play::cursor_back_host(self.w, self.h) as i32,
                 LibCall::Move { slot, tile, marker, sneak, b177, alt, walk: None, squad } =>
                     ja1_move_order(self.w, self.h, slot, tile, marker, sneak, b177, alt, squad),
                 LibCall::Move { slot, tile, marker, sneak, b177, alt, walk: Some(r), .. } =>
@@ -1513,12 +1527,14 @@ impl<'a> Hover<'a> {
         ov.step(&mut |c| match c {
             OvCall::Occupant(t) => self.occupant(t) as i32,
             OvCall::Hp(o) => self.rs(o as usize, 0x183),
+            OvCall::Visible(o) => self.rs(o as usize, 0x9C),
             OvCall::ShowMouse => 0,
             // SAFETY: valid world and host.
             OvCall::HideMarks => unsafe {
                 ja1_hide_path_marks(self.w, self.h, 1);
                 0
             },
+            OvCall::CursorBack => self.lib(LibCall::CursorBack),
             OvCall::Select(o) => self.lib(LibCall::Select { slot: o as i32, force: 0, quote: 1 }),
             OvCall::NotAvailable => {
                 out.status = Some("Not available!".into());
@@ -1708,6 +1724,10 @@ impl<'a> Hover<'a> {
                         } else {
                             self.lib(LibCall::Anim { slot: s as i32, code: 6, keep: 1, reset: 0 });
                         }
+                    }
+                    // #70 F61 (row 87): 1.15m UseItemAt 0x1DD83 calls cave 0x8AF04 (CursorItemBack? first).
+                    if ja1logic::fanfix::on(61) {
+                        self.lib(LibCall::CursorBack);
                     }
                     if self.lib(LibCall::Select { slot: o as i32, force: 1, quote: 1 }) != 0 {
                         self.mode_cursor();

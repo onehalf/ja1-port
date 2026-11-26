@@ -289,7 +289,7 @@ pub(crate) fn shared_raw(edt: &[u8], at: usize) -> Vec<u8> {
 /// The target buffer 0x229B1C of StrReplace 0x252B0: what a run leaves in it stays for the next run.
 static REPLACED: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 
-/// StrReplace 0x252B0 with its bug (issue #2): the place counter of the part before `needle` is a signed byte, so from
+/// StrReplace 0x252B0 with its bug (issue #2 row 44; fan fix F04 removes it): the place counter of the part before `needle` is a signed byte, so from
 /// place 128 on the bytes go in front of the target, and the end mark too. The text then goes on with the old bytes of
 /// the target from place 128 up to their first 0, and `rep` and the rest come after them. Bytes in front of the target are not kept.
 pub(crate) fn str_replace(src: &[u8], rep: &[u8], needle: &[u8]) -> Vec<u8> {
@@ -307,13 +307,23 @@ fn str_replace_in(d: &mut Vec<u8>, src: &[u8], rep: &[u8], needle: &[u8]) -> Vec
         d[src.len()] = 0;
         return src;
     };
-    for (i, &b) in src[..at].iter().enumerate() {
-        if i < 128 {
-            d[i] = b;
+    // Fan fix F04 (#70 row 64, #2 row 44; changelog 1.15l "Fixed a memory corruption problem in the display of some
+    // merc's messages (which resulted in badly formed and cut text)", found by DarzaR): 1.15m reads the byte counter
+    // unsigned (0x252EB and 0x25303: movsx -> movzx), so every byte of the part before `needle` lands in the target.
+    if ja1logic::fanfix::on(4) {
+        for (i, &b) in src[..at].iter().enumerate() {
+            d[i & 0xFF] = b;
         }
-    }
-    if at < 128 {
-        d[at] = 0;
+        d[at & 0xFF] = 0;
+    } else {
+        for (i, &b) in src[..at].iter().enumerate() {
+            if i < 128 {
+                d[i] = b;
+            }
+        }
+        if at < 128 {
+            d[at] = 0;
+        }
     }
     for part in [rep, &src[at + needle.len()..]] {
         let e = d.iter().position(|&c| c == 0).unwrap_or(0);

@@ -133,6 +133,12 @@ fn resolve_battle(w: *mut Ja1World, h: *const Ja1Host, s: u8, f: u8) {
         time_compress(w, h, 0);
     }
     ai.call(op::REFRESH, &[]);
+    // Fan fix F27 (1.15m ResolveSectorBattle 0x3E54D..0x3E56B, #70 row 22): the key byte 0x95DC3 is cleared after
+    // the refresh, so an old Escape left there no longer skips the whole show at the first click (WaitMs? answers
+    // "skip" by that byte). The library has no key byte: battle_ui kind 9 asks the host to clear it.
+    if crate::fanfix::on(27) {
+        sh.ui(9, 0);
+    }
     // 2. Guards fight.
     if st(w, s, GUARDS) != 0 || st(w, s, TAPPERS) != 0 {
         fought = true;

@@ -318,7 +318,23 @@ impl X {
         }
         // 8.
         self.a.call(op::CLOSE, &[]);
-        if matches!(self.table(w.t1_class, o0), 2 | 3) {
+        self.move_code_at(t, o0);
+        // #70 F34 (row 26): 1.15m 0x351A7 jumps to cave 0x18EC4, which runs the same step for the 8 tiles around
+        // the centre (directions 8 down to 1, StepTile; object = the tile's object now), so a breach blown into a
+        // wall next to the centre can be walked through at once.
+        if crate::fanfix::on(34) {
+            for d in (1..=8).rev() {
+                let n = crate::ai::step_tile(t, self.a.dir_step(d));
+                self.move_code_at(n, self.t1(n));
+            }
+        }
+    }
+
+    /// Step 8 for tile `t` with object `o`: a door class (2, 3) gets the door code, else the move code is built
+    /// again unless it is a door code.
+    fn move_code_at(&self, t: i32, o: u8) {
+        let w = self.w();
+        if matches!(self.table(w.t1_class, o), 2 | 3) {
             self.move_code_put(t, DOOR);
         } else {
             let prev = self.move_code(t);

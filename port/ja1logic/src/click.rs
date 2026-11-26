@@ -104,6 +104,7 @@ impl Ai {
     pub(super) fn use_cost(&self, spot: i32, tile: i32, g: u8, kind: u8) -> u8 {
         // 1.
         let p = self.path_ap(spot) as u8;
+        let fan = crate::fanfix::on(57);
         // 2.
         if kind == 0 || kind >= 0xFE {
             let d = self.tile_standable(tile) as i8;
@@ -113,7 +114,7 @@ impl Ai {
                 3
             } else if g >= 200 {
                 5
-            } else if get8(unsafe { (*self.w).ground_items }, GROUND_LEN, 12 * g as i64 + 6) != 0 {
+            } else if !fan && get8(unsafe { (*self.w).ground_items }, GROUND_LEN, 12 * g as i64 + 6) != 0 {
                 4
             } else if self.slot() >= 0x28 && get8(unsafe { (*self.w).ground_items }, GROUND_LEN, 12 * g as i64) == 0x72 {
                 2
@@ -122,7 +123,18 @@ impl Ai {
             };
             return p.wrapping_add(add);
         }
-        // 3.
+        // 3. (F57: 1.15m UseCost 0x59B9E..0x59C01 drops 0x76 and adds 0x9F/0x97 +10, 0xA3 +8, 0x98 +3.)
+        if fan {
+            return p.wrapping_add(match kind {
+                0x9F | 0x9B | 0x97 => 10,
+                0x96 => self.call(op::SHOT_AP, &[self.slot(), tile]) as u8,
+                0xA3 => 8,
+                0x93 | 0x9E => 5,
+                0x9D => 6,
+                0x98 => 3,
+                _ => 0,
+            });
+        }
         p.wrapping_add(match kind {
             0x76 | 0x9B => 10,
             0x96 => self.call(op::SHOT_AP, &[self.slot(), tile]) as u8,
@@ -552,8 +564,12 @@ impl Ai {
         let slot = self.slot();
         let it = self.rd8(0);
         let c = self.s8(2);
-        if self.c_item(it, 7) != 0 && c > 15 && it != 0x11 && self.random(0x50) + 20 > c + 50 {
-            let v = self.random(10) + 1;
+        // #70 F37 (row 79): 1.15m JamCheck 0x59A77 tests condition > 9 (not 15) and 0x59A94 sets Random(9) + 1, so
+        // items at condition 10..15 can jam too.
+        let fan = crate::fanfix::on(37);
+        let floor = if fan { 9 } else { 15 };
+        if self.c_item(it, 7) != 0 && c > floor && it != 0x11 && self.random(0x50) + 20 > c + 50 {
+            let v = self.random(if fan { 9 } else { 10 }) + 1;
             self.wr8(2, v as u8);
             if self.c_selected() as i32 == slot {
                 self.call(op::ITEM_PANEL, &[slot, 0, 1]);

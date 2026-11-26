@@ -569,14 +569,15 @@ fn walk(w: &mut World, f: &mut [u8], save: bool) {
     n!(w.loss_timer); // 137: g_lossTimer 0x92DE8
     {
         // 138..140: the volume numbers 0x963A0 / 0x963A4 (always 127) / 0x963A8, program-run values outside the
-        // world. Quick Restore reads them back without sending them to AIL (sound::set_volumes).
+        // world. Quick Restore reads them back without sending them to AIL (sound::restore_volumes; port fix P09
+        // sends them).
         let mut v = crate::sound::volumes();
         let mut fixed = 127i32;
         n!(v.music);
         n!(fixed);
         n!(v.sound);
         if !save {
-            crate::sound::set_volumes(v);
+            crate::sound::restore_volumes(v);
         }
     }
     skip!(4); // 141

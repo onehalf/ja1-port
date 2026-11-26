@@ -915,7 +915,9 @@ impl Inv {
         });
         if let Some(p) = hit {
             if self.wd().key_ctrl != 0 {
-                if self.unstack(Loc::Sol(s, p)) {
+                // Port fix P02 (#71, #2 row 10): rects 12 / 13 (attachment, ground) hold no item entry; the original
+                // unstacks soldier bytes +0x90 / +0x9C there. With P02 the click is still used, nothing moves.
+                if !(crate::fanfix::port_on(2) && p >= 12) && self.unstack(Loc::Sol(s, p)) {
                     self.hide();
                     self.draw_slot(s, p);
                     self.show();
@@ -1155,12 +1157,15 @@ impl Inv {
             self.spend_ap(s, 4, 0);
             self.set_picked(s, 1);
         }
-        let mine = self.call(MINE_SPOTTED, &[s as i32, tile, g as i32]) as u8 != 0;
+        let spotted = self.call(MINE_SPOTTED, &[s as i32, tile, g as i32]) as u8 as i8;
+        let mine = spotted != 0;
+        // F56 (found by DarzaR): 1.15m UseInventoryItem? 0x54A4D jle: a negative MineSpotted? answer counts no mine down.
+        let down = mine && (spotted > 0 || !crate::fanfix::on(56));
         let r = self.call(DISARM, &[s as i32, tile, g as i32, 0, 0]) as i32;
         if r > 0 {
             self.body(s);
             self.call(PICK_UP, &[s as i32, tile, 0]);
-            if mine {
+            if down {
                 self.mine_count_down();
             }
             self.cursor_pic();
@@ -1375,8 +1380,11 @@ impl Inv {
         if let Some(j) = (0..4).find(|&j| in_rect(x, y, 29, 59 + 19 * j, 70, 74 + 19 * j)) {
             let v = self.call(STORE_PLACE, &[j, 1]);
             if v & NO_RECORD != 0 {
-                // No current record: the original reads machine memory here (strategic.md): a stop point.
-                self.call(op::DIV_ZERO, &[]);
+                // No current record: the original reads machine memory here (strategic.md): a stop point. Port fix
+                // P05 (#2 row 19): no info box, nothing else.
+                if !crate::fanfix::port_on(5) {
+                    self.call(op::DIV_ZERO, &[]);
+                }
             } else if v & 1 << 25 != 0 {
                 info((v & 0xFF) as i32, (v >> 8) as u8 as i8 as i32, (v >> 16) as u8 as i8 as i32, 1);
             } else if v != 0 {
@@ -1416,7 +1424,9 @@ impl Inv {
         });
         if let Some(p) = hit {
             if self.wd().key_ctrl != 0 {
-                if self.unstack(Loc::Sol(s, p)) {
+                // Port fix P02 (#71, #2 row 10): rects 12 / 13 (attachment, ground) hold no item entry; the original
+                // unstacks soldier bytes +0x90 / +0x9C there. With P02 the click is still used, nothing moves.
+                if !(crate::fanfix::port_on(2) && p >= 12) && self.unstack(Loc::Sol(s, p)) {
                     self.hide();
                     self.draw_slot(s, p);
                     self.show();
@@ -1470,8 +1480,11 @@ impl Inv {
                 self.click();
                 let v = self.call(STORE_PLACE, &[j]);
                 if v & NO_RECORD != 0 {
-                    // No current record: the original reads machine memory here (strategic.md): a stop point.
-                    self.call(op::DIV_ZERO, &[]);
+                    // No current record: the original reads machine memory here (strategic.md): a stop point. Port
+                    // fix P05 (#2 row 19): nothing is taken (the empty cursor picture, then wait up).
+                    if !crate::fanfix::port_on(5) {
+                        self.call(op::DIV_ZERO, &[]);
+                    }
                 } else if v & 1 << 24 != 0 {
                     let (t, q, cd) = (v as u8, (v >> 8) as u8, (v >> 16) as u8);
                     if v & 1 << 25 != 0 {
@@ -1735,9 +1748,14 @@ pub(super) fn store_all(w: *mut Ja1World, h: *const Ja1Host, slot: i32, redraw: 
     for p in (0..12).rev() {
         let l = Loc::Sol(s, p);
         if inv.typ(l) != 0 {
-            super::pay::stash_copy(w, h, inv.get12(l));
-            for i in 0..6 {
-                inv.pb(l, i, 0);
+            // Port fix P06 (#2 row 20): the entry is cleared only when the store took it (Store an
+            // item clears its copy then); 1.13b clears it always, so an item of a type with 99+ in the store is lost.
+            let mut c = inv.get12(l);
+            super::pay::stash_buf(w, h, &mut c);
+            if !crate::fanfix::port_on(6) || c[0] == 0 {
+                for i in 0..6 {
+                    inv.pb(l, i, 0);
+                }
             }
         }
     }

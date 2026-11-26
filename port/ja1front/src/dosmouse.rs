@@ -51,6 +51,19 @@ pub fn leave_counts(captured: bool) -> bool {
     !captured
 }
 
+/// Port option (2026-11-25): with the mouse released, a pointer outside the focused window keeps the edge scroll
+/// of the window side it is past. `win` = the window's place and size on the desktop, `g` = the desktop pointer; the
+/// answer = the window point at the nearest window edge, None while the pointer is inside the window.
+pub fn outside_edge(win: (i32, i32, u32, u32), g: (i32, i32)) -> Option<(i32, i32)> {
+    let (wx, wy, ww, wh) = win;
+    let (x, y) = (g.0 - wx, g.1 - wy);
+    let (w, h) = (ww as i32, wh as i32);
+    if w <= 0 || h <= 0 || ((0..w).contains(&x) && (0..h).contains(&y)) {
+        return None;
+    }
+    Some((x.clamp(0, w - 1), y.clamp(0, h - 1)))
+}
+
 /// MousePoll 0x678E8 draws the pointer into the 8-bit picture, so the screen's palette gives its colours (#64 rig:
 /// main menu arrow (60, 89, 130), office arrow (247, 0, 0)). `pix` = colour indexes of the shape, 0 = not drawn;
 /// `pal` = the 8-bit palette of the shown picture. RGBA bytes, alpha 0 where not drawn.
@@ -107,6 +120,21 @@ mod tests {
         assert_eq!(pin(r, 700, 300), (700, 300));
         assert!(!leave_counts(true));
         assert!(leave_counts(false));
+    }
+
+    /// A pointer past a window side gives that side's edge point (corners both); inside the window none.
+    #[test]
+    fn a_pointer_outside_the_window_gives_the_nearest_edge() {
+        let win = (100, 50, 1280, 800);
+        assert_eq!(outside_edge(win, (700, 400)), None);
+        assert_eq!(outside_edge(win, (100, 50)), None);
+        assert_eq!(outside_edge(win, (1379, 849)), None);
+        assert_eq!(outside_edge(win, (40, 400)), Some((0, 350)));
+        assert_eq!(outside_edge(win, (1500, 400)), Some((1279, 350)));
+        assert_eq!(outside_edge(win, (700, 10)), Some((600, 0)));
+        assert_eq!(outside_edge(win, (700, 900)), Some((600, 799)));
+        assert_eq!(outside_edge(win, (0, 0)), Some((0, 0)));
+        assert_eq!(outside_edge((0, 0, 0, 0), (5, 5)), None);
     }
 
     /// No draw while the place, the shape and the on/off stay the same.

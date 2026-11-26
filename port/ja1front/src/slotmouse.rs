@@ -96,6 +96,12 @@ pub fn right_opens(r: &[u8]) -> bool {
     r[0x17E] == 0 && r[0x183] != 0
 }
 
+/// #70 F61 (row 87): 1.15m SlotMouse 0x11B24 calls cave 0x8AF04: CursorItemBack? 0x53660 puts a held item back into
+/// the old merc's box before SelectMerc? 0x1148C. 1.13b selects at once.
+pub fn cursor_back_first() -> bool {
+    ja1logic::fanfix::on(61)
+}
+
 /// 0x1197C: the left button acts on a merc on the map with hp above 0.
 pub fn left_acts(r: &[u8]) -> bool {
     r[0x138] != 0 && (r[0x183] as i8) > 0

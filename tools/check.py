@@ -54,11 +54,62 @@ EXTRA = [("compose_diff.py --flight", "compose_diff.py", ["--flight", "20", "bui
          ("path_diff.py --port", "path_diff.py", ["300", "--port"]),
          ("move_diff.py --port", "move_diff.py", ["2000", "--port"]),
          ("damage_diff.py --port", "damage_diff.py", ["1500", "--port"]),
+         ("damage_diff.py --port --fan", "damage_diff.py", ["1500", "--port", "--fan"]),   # #70 fan fix F43 (row 93: armour works only at condition >= 9) vs the 1.15m HitLocationDamage sites
          ("soldier_diff.py --port", "soldier_diff.py", ["100", "build/mem_tac60.bin", "build/mem_combat1.bin",
                                                         "build/mem_death1.bin", "--port"]),
          ("ai_diff.py --port", "ai_diff.py", ["--port"]),
          ("ai_diff.py --port use_on_tile", "ai_diff.py", ["--port", "--only", "use_on_tile", "3000"]),   # combat.md Using the hand item on a tile
          ("ai_diff.py --port bury_mine", "ai_diff.py", ["--port", "--only", "bury_mine", "2000"]),   # combat.md Burying a mine
+         ("ai_diff.py --port --fan take_damage", "ai_diff.py", ["--port", "--only", "take_damage", "3000", "--fan", "all"]),   # #70 fan fixes F08..F11 vs the 1.15m TakeDamage bytes
+         ("ai_diff.py --port --fan end_task", "ai_diff.py", ["--port", "--only", "end_task", "3000", "--fan", "all"]),   # #70 fan fix F12 vs the 1.15m EndTask bytes
+         ("ai_diff.py --port --fan swap_places", "ai_diff.py", ["--port", "--only", "swap_places", "2000", "--fan", "13,68"]),   # #70 fan fixes F13 (PlaceAt) + F68 (StepApCost on broken bridge pieces) vs the 1.15m bytes
+         ("ai_diff.py --port --fan walk_end", "ai_diff.py", ["--port", "--only", "walk_end", "3000", "--fan", "14"]),   # #70 fan fix F14 vs the 1.15m WalkEnd bytes (StopWalk -1)
+         ("ai_diff.py --port --fan turn_end", "ai_diff.py", ["--port", "--only", "turn_end", "5000", "--fan", "15,18,61"]),   # #70 fan fixes F61 (MercsTurn? 0x13033: cursor item back before the select), F15 vs the 1.15m EnemiesTurn? bytes (bled enemy slide), F18 EndTurn? time compression off
+         ("ai_diff.py --port --fan fuses", "ai_diff.py", ["--port", "--only", "fuses,ticks", "--fan", "18"]),   # #70 fan fix F18 vs the 1.15m TacticalTimer? + TacticalLoop fuse bytes
+         ("ai_diff.py --port --fan turn_new", "ai_diff.py", ["--port", "--only", "turn_new", "--fan", "19,20,61"]),   # #70 fan fixes F61 (NewTurn? 0x12A17: cursor item back before the select), F19 (Santino stage byte), F20 (redraw_next before step 8) vs the 1.15m NewTurn? bytes
+         ("ai_diff.py --port --fan end_of_day", "ai_diff.py", ["--port", "--only", "end_of_day", "--fan", "21"]),   # #70 fan fix F21 vs the 1.15m MsgRetreatCasualty? bytes (retreat risk)
+         ("ai_diff.py --port --fan leave_sector", "ai_diff.py", ["--port", "--only", "leave_sector", "--fan", "22"]),   # #70 fan fix F22 vs the 1.15m LeaveSectorCleanup? bytes (territory recount after SectorGained?)
+         ("ai_diff.py --port --fan anim_step", "ai_diff.py", ["--port", "--only", "anim_step", "6000", "--fan", "23"]),   # #70 fan fix F23 vs the 1.15m AnimStep bytes (no stand anim under 15 health)
+         ("ai_diff.py --port --fan anim_frame", "ai_diff.py", ["--port", "--only", "anim_frame", "6000", "--fan", "23"]),   # #70 F23 AnimFrame part: fall words 0x1E5/0x1E6 px steps + diagonal pixel step vs the 1.15m bytes
+         ("ai_diff.py --port --fan turn_flow", "ai_diff.py", ["--port", "--only", "turn_flow", "--fan", "29"]),   # #70 fan fix F29 vs the 1.15m NextTurn? + InterruptTurn? bytes (interrupt inside an interrupt)
+         ("ai_diff.py --port --fan melee_hit", "ai_diff.py", ["--port", "--only", "melee_hit", "3000", "--fan", "30,33,59"]),   # #70 fan fix F59 (off-map stab target refused), F30 vs the 1.15m MeleeHit? bytes (no practice roll for a stab miss by the own side; F33 the stab end clears the queued action)
+         ("ai_diff.py --port --fan attack_go", "ai_diff.py", ["--port", "--only", "attack_go", "3000", "--fan", "32"]),   # #70 fan fix F32 vs the 1.15m AttackGo? bytes (no shot while something still animates)
+         ("ai_diff.py --port --fan explode_dat", "ai_diff.py", ["--port", "--only", "explode_dat", "3000", "--fan", "34"]),   # #70 fan fix F34 vs the 1.15m LoadExplodeDat cave 0x18EC4 (move codes of the 8 tiles around a crater)
+         ("ai_diff.py --port --fan merc_entry", "ai_diff.py", ["--port", "--only", "merc_entry", "3000", "--fan", "35"]),   # #70 fan fix F35 vs the 1.15m PlaceMercsAtEntry bytes (the ring starts at the facing)
+         ("ai_diff.py --port --fan think", "ai_diff.py", ["--port", "--only", "think", "3000", "--fan", "36"]),   # #70 fan fix F36 (row 34: turn-based off after the timeout shot)
+         ("ai_diff.py --port --fan jam_check", "ai_diff.py", ["--port", "--only", "w_59a54", "3000", "--fan", "37"]),   # #70 fan fix F37 (row 79: worn guns at condition 10..15 can jam)
+         ("ai_diff.py --port --fan turn_handback", "ai_diff.py", ["--port", "--only", "turn_end", "3000", "--fan", "38"]),   # #70 fan fix F38 (row 91: turn hand-back after an interrupt)
+         ("ai_diff.py --port --fan merc_busy", "ai_diff.py", ["--port", "--only", "start_turn", "3000", "--fan", "39"]),   # #70 fan fix F39 (row 92 part: duty 8 counts as busy, no story view in an interrupt)
+         ("ai_diff.py --port --fan collect_cash", "ai_diff.py", ["--port", "--only", "pay", "3000", "--fan", "41"]),   # #70 fan fix F41 (row 63 part: found cash also in the balance before the day)
+         ("verdict_diff.py --port --fan", "verdict_diff.py", ["3000", "--port", "--fan"]),   # #70 fan fix F41 (row 63: guide bonus also in the balance before the day)
+         ("verdict_diff.py --port --pfix 20", "verdict_diff.py", ["3000", "--port", "--pfix", "20"]),   # #71 port fix P20 (#2 row 62: no capacity remark for a capacity with no quote) vs the original with the four step-13 default jumps of DayEndVerdict re-aimed (0x60E7F..0x60E9B)
+         ("ai_diff.py --port --pfix door_fx", "ai_diff.py", ["--port", "--only", "door_fx", "6000", "--pfix", "1"]),   # #71 port fix P01 (#2 row 9: a key from a ring in a pocket clears the ring's 4th id, not the hand item's) vs the original with the same fix as a 4-byte asm patch at 0x3AF66
+         ("ai_diff.py --port --fan active_frame", "ai_diff.py", ["--port", "--only", "active_frame", "5000", "--fan", "24,25,61,29,70"]),   # #70 fan fixes F70 (ActiveFrame 0x1BA9F: sneak practice only after a step), F29 (ActiveFrame 0x1BCEB: a merc interrupt drops the queued guard interrupt), F61 (StepStart 0x1A650 low-AP stop: cursor item back before the select), F24 (signed reserve AP stop: StepStart 0x1A587 + walk-end use 0x1BF44), F25 (mine spotted: practice rolls) vs the 1.15m StepStart bytes
+         ("ai_diff.py --port --pfix ledger", "ai_diff.py", ["--port", "--only", "ledger", "6000", "--pfix", "3"]),   # #71 port fix P03 (#2 row 13: the tapper quit message counts tappers) vs the original with `mov al, bh` at 0x50E64
+         ("ai_diff.py --port --pfix sector_start", "ai_diff.py", ["--port", "--only", "sector_start", "6000", "--pfix", "16"]),   # #71 port fix P16 (#2 row 36: a broken demolition charge in sector 26 gets the kind of the other charges) vs the original with the cave at 0x2EF26
+         ("ai_diff.py --port --pfix use_on_tile", "ai_diff.py", ["--port", "--only", "use_on_tile", "6000", "--pfix", "8"]),   # #71 port fix P08 (#2 row 37: no type test of ground entry 0xFF) vs the original with the cave at UseOnTile? 0x3D3E1
+         ("ai_diff.py --port --fan ledger", "ai_diff.py", ["--port", "--only", "ledger", "6000", "--fan", "26,53"]),   # #70 fan fixes F26 (tapped trees capped by workable), F53 (a sector not owned keeps tappers and guards) vs the 1.15m RecalcTerritory bytes
+         ("ai_diff.py --port --fan use_on_tile", "ai_diff.py", ["--port", "--only", "use_on_tile,mine_spotted,pickup_here", "6000", "--fan", "54,55,56"]),   # #70 fan fixes F54 (no TriggerItem for ground entry 0xFF), F55 (practice only once: blast list), F56 (MineSpotted -FxHere for explosives, signed callers) vs the 1.15m UseOnTile bytes
+         ("ai_diff.py --port --fan merc_view", "ai_diff.py", ["--port", "--only", "view", "--fan", "61"]),   # #70 fan fix F61 (row 87: MercView 0x14C75 puts the cursor item back before the select)
+         ("ai_diff.py --port --fan use_cost", "ai_diff.py", ["--port", "--only", "w_59ae8", "6000", "--fan", "57"]),   # #70 fan fix F57 (UseCost: ground byte 6 ignored, 1.15m kind table) vs the 1.15m UseCost bytes
+         ("ai_diff.py --port --fan throw_far", "ai_diff.py", ["--port", "--only", "throw_option", "1500", "--fan", "58"]),   # #70 fan fix F58 (ThrowOption: chance 0 past reach + 16) vs the 1.15m ThrowChance / ThrowOption bytes
+         ("ai_diff.py --port --fan leave_path", "ai_diff.py", ["--port", "--only", "leave_path", "2400", "--fan", "28"]),   # #70 fan fix F28 vs the 1.15m TacticalLoop leave path bytes (cleanup battle before the fade out)
+         ("ai_diff.py --port --fan worn_options", "ai_diff.py", ["--port", "--only", "throw_option,gun_option,knife_option", "1500", "--fan", "43"]),   # #70 fan fix F43 (row 93: worn gear needs condition) in ThrowDamage / ExpectedDamage / KnifeDamage / chances
+         ("ai_diff.py --port --fan worn_ai", "ai_diff.py", ["--port", "--only", "engaged_action,calm_action,can_stand_at", "1500", "--fan", "43"]),   # #70 fan fix F43 (row 93: gas mask condition) in EngagedAction / CalmAction / CanStandAt
+         ("ai_diff.py --port --fan worn_shot", "ai_diff.py", ["--port", "--only", "launch,w_56dd4,turn_rest,blast_tile", "1500", "--fan", "43"]),   # #70 fan fix F43 (row 93: silencer + gas mask condition) in LaunchProjectile / ShotEnd / TurnRest? / BlastTile?
+         ("ai_diff.py --port --fan sector_start", "ai_diff.py", ["--port", "--only", "sector_start", "12000", "--fan", "44"]),   # #70 fan fix F44 (row 96: no fake guards at the tapper groups) vs the 1.15m SetupSectorFromXra bytes
+         ("ai_diff.py --port --fan bridges", "ai_diff.py", ["--port", "--only", "effect_hit,path_ap,move_ap_cost,active_frame", "3000", "--fan", "68"]),   # #70 fan fix F68 (row 71 part: a broken bridge piece in water costs +13 AP, the sweep after a crater blocks pieces with no deck next to them) vs the 1.15m StepApCost + EffectHit cave bytes
+         ("ai_diff.py --port --fan find_path", "ai_diff.py", ["--port", "--only", "find_path,path_ap", "3000", "--fan", "47"]),   # #70 fan fix F47 (row 61: unseen soldiers do not block a merc's path) vs the 1.15m FindPath bytes + helper 0x2C57E
+         ("ai_diff.py --port --fan walk_step", "ai_diff.py", ["--port", "--only", "walk_step", "3000", "--fan", "48"]),   # #70 fan fix F48 (row 62: a backward walk picks the next tile with the opposite facing) vs the 1.15m WalkMove bytes + cave 0x48250
+         ("ai_diff.py --port --fan bury_mine", "ai_diff.py", ["--port", "--only", "bury_mine", "3000", "--fan", "49"]),   # #70 fan fix F49 (row 66: a non-mine explosive goes onto the ground first, the blast starts where it landed) vs the 1.15m BuryMine bytes + PutItem 0x3FE43
+         ("ai_diff.py --port --fan bury_mine 49,50", "ai_diff.py", ["--port", "--only", "bury_mine", "3000", "--fan", "49,50"]),   # #70 F49 + F50: the 1.15m PutItem swap cave hands back the asked tile
+         ("ai_diff.py --port --fan put_item", "ai_diff.py", ["--port", "--only", "put_item", "--fan", "50"]),   # #70 fan fix F50 (row 70 part: the swap keeps the old item under a timed effect, its blast mark follows it) vs the 1.15m PutItem cave 0x488A6
+         ("ai_diff.py --port --fan effect_hit", "ai_diff.py", ["--port", "--only", "effect_hit", "--fan", "51"]),
+         ("ai_diff.py --port --fan effect_pass", "ai_diff.py", ["--port", "--only", "effect_pass", "4000", "--fan", "69"]),   # #70 fan fix F69 (row 30: an effect record is flagged before its hit, so a merc death redraw cannot hit it again) vs the 1.15m DrawProjectilePass? 0x1763A bytes   # #70 fan fix F51 (rows 70 + 68 part: a cleared blue flag recomputes only its own move code) vs the 1.15m cave 0x5A855
+         ("ai_diff.py --port --fan pickup", "ai_diff.py", ["--port", "--only", "pickup", "--fan", "51"]),
+         ("ai_diff.py --port --fan trigger", "ai_diff.py", ["--port", "--only", "trigger", "3000", "--fan", "51"]),   # #70 F51 through TriggerItem? 0x1AE80 / 0x1AF42 (the move-code table compared)   # #70 F51 through Take ground item (ClearTileMarker86? 0x19D6C)
+         ("ai_diff.py --port --fan impact", "ai_diff.py", ["--port", "--only", "impact,land_item", "3000", "--fan", "50,52"]),   # #70 fan fix F52 (row 70 rest: a thrown explosive that lands starts its effect on the tile PutItem returns; LandItem? EAX)
+         ("ai_diff.py --port --fan sight_check", "ai_diff.py", ["--port", "--only", "sight_check,mark_seen,guard_turned", "3000", "--fan", "17"]),   # #70 fan fix F17 vs the 1.15m SightCheck / MarkSeen / 0x7351C bytes (down opponents seen)
          ("ai_diff.py --port revive_roll", "ai_diff.py", ["--port", "--only", "revive_roll", "3000"]),   # combat.md Getting up after a collapse
          ("ai_diff.py --port pickup_here", "ai_diff.py", ["--port", "--only", "pickup_here", "2000"]),   # combat.md Picking up at the own tile
          ("ai_diff.py --port land_item", "ai_diff.py", ["--port", "--only", "land_item", "2000"]),   # combat.md A thrown item lands
@@ -104,6 +155,10 @@ EXTRA = [("compose_diff.py --flight", "compose_diff.py", ["--flight", "20", "bui
          ("panel_diff.py --port --switch", "panel_diff.py", ["300", "--port", "--switch"]),   # switch view (panel.md)
          ("panel_data_diff.py --port", "panel_data_diff.py", ["--port"]),       # face buffers + eye rows (panel.md)   # Hit test (shooting.md batch 5)
          ("inv_diff.py --port", "inv_diff.py", ["2000", "--port"]),            # inventory screen (inventory.md)
+         ("invwrap_diff.py --fan 66", "invwrap_diff.py", ["1500", "--fan", "66"]),   # #70 fan fix F66 (row 90): a pick-up's inventory screen runs with screen_drawn 1 (1.15m cave 0x2B6A1)
+         ("invwrap_diff.py --pfix 11", "invwrap_diff.py", ["1500", "--pfix", "11"]),   # #71 port fix P11 (#2 row 47: after the inventory screen the merc shown last gets its reserved points too) vs the original with the cave at InvScreenRun? 0x54E7B
+         ("inv_diff.py --port --pfix 2", "inv_diff.py", ["2000", "--port", "--pfix", "2"]),   # #71 port fix P02 (#2 row 10: ctrl-click on the attachment / ground box unstacks nothing) vs the original with the same fix (caves at UseInventoryItem? 0x54179, AssignScreen? 0x49619); no click filter
+         ("inv_diff.py --port --fan 56", "inv_diff.py", ["2000", "--port", "--fan", "56"]),   # #70 fan fix F56: pick up counts a mine down only for MineSpotted > 0 (1.15m 0x54A4D)
          ("inv_diff.py --port --strip", "inv_diff.py", ["1000", "--port", "--strip"]),   # bottom strip clicks (panel.md)
          ("popup_diff.py --port", "popup_diff.py", ["200", "--port"]),         # merc stat popup (panel.md)
          ("rect_diff.py", "rect_diff.py", ["2000"]),                          # rect visible (shooting.md Explode)
@@ -111,30 +166,38 @@ EXTRA = [("compose_diff.py --flight", "compose_diff.py", ["--flight", "20", "bui
          ("invdraw_diff.py --port", "invdraw_diff.py", ["300", "--port"]),   # inventory screen drawing (inventory.md)
          ("payday_diff.py --port", "payday_diff.py", ["1000", "--port"]),     # "not enough funds" dialog (strategic.md)
          ("duties_diff.py --port", "duties_diff.py", ["3000", "--port"]),     # morning duties (strategic.md)
+         ("duties_diff.py --port --fan", "duties_diff.py", ["2000", "--port", "--fan", "all"]),     # #70 fan fixes on vs the 1.15m code (F02)
          ("xp_diff.py --port", "xp_diff.py", ["500", "--port"]),             # morning stat changes (strategic.md)
+         ("xp_diff.py --port --fan", "xp_diff.py", ["500", "--port", "--fan", "all"]),     # #70 fan fixes on vs the 1.15m code (F03)
          ("morning_diff.py --port", "morning_diff.py", ["2000", "--port"]),  # back on duty, profile sync (strategic.md)
          ("complain_diff.py --port", "complain_diff.py", ["2000", "--port"]),  # AIM rate complaints, disliked merc
          ("corpse_diff.py --port", "corpse_diff.py", ["1000", "--port"]),   # corpse export (strategic.md)
          ("raise_diff.py --port", "raise_diff.py", ["1000", "--port"]),     # salary raise (strategic.md)
          ("mapopen_diff.py --port", "mapopen_diff.py", ["40", "--port"]),   # InitStrategicMap 0x43ECC: the whole opening picture
+         ("island_diff.py --port --pfix 4", "island_diff.py", ["100", "--port", "--pfix", "4"]),   # #71 port fix P04 (#2 row 16: the map column is capped at 9) vs the original with the same cap (cave at 0x41426)
          ("island_diff.py --port", "island_diff.py", ["300", "--port"]),   # the island map picture (strategic.md)
          ("replaypic_diff.py --port", "replaypic_diff.py", ["600", "--port"]),   # the replay map pictures (strategic.md)
+         ("replaypic_diff.py --port --pfix 14", "replaypic_diff.py", ["300", "--port", "--pfix", "14"]),   # #71 port fix P14 (#2 row 32: no shifted marker copy in the replay battle flash) vs the original without the DrawMarkersTo call 0x64B5E
          ("map_diff.py --port", "map_diff.py", ["3000", "--port"]),       # sector click, start checks (strategic.md)
          ("strat_input_diff.py --port", "strat_input_diff.py", ["200", "--port"]),   # strategic screen input loop (strategic.md)
          ("day_diff.py --port", "day_diff.py", ["3000", "--port"]),       # day start (strategic.md)
          ("sunrise_diff.py --port", "sunrise_diff.py", ["2000", "--port"]),   # sunrise (strategic.md)
          ("stratopen_diff.py --port", "stratopen_diff.py", ["1000", "--port"]),   # strategic screen opening (strategic.md)
          ("storyday_diff.py --port", "storyday_diff.py", ["3000", "--port"]),   # story events at the day start (strategic.md)
+         ("storyday_diff.py --port --fan", "storyday_diff.py", ["3000", "--port", "--fan"]),   # #70 fan fix F40 (row 85: Dying Trees and the kidnapping on one day)
          ("clock_diff.py --port", "clock_diff.py", ["3000", "--port"]),     # the day clock, time compression (turns.md)
          ("guard_diff.py --port", "guard_diff.py", ["3000", "--port"]),     # the guard screen (strategic.md)
+         ("guard_diff.py --port --fan", "guard_diff.py", ["1500", "--port", "--fan", "all"]),     # #70 fan fixes on vs the 1.15m code (F05)
          ("guide_diff.py --port", "guide_diff.py", ["3000", "--port"]),     # the guide's advice (strategic.md)
          ("verdict_diff.py --port", "verdict_diff.py", ["3000", "--port"]),   # the day's verdict (strategic.md)
          ("rating_diff.py --port", "rating_diff.py", ["2000", "--port"]),   # the performance rating (ending.md)
          ("trav_diff.py --port", "trav_diff.py", ["3000", "--port"]),   # the traverse (soldier_update.md)
          ("stage_diff.py --port", "stage_diff.py", ["3000", "--port"]),   # timed effects + home-sector stages (turns.md)
          ("battle_diff.py --port", "battle_diff.py", ["2000", "--port"]),   # sector battles (strategic.md)
+         ("battle_diff.py --port --fan", "battle_diff.py", ["1000", "--port", "--fan", "27"]),   # #70 fan fix F27 vs the 1.15m ResolveSectorBattle bytes (key byte cleared after the refresh)
          ("practice_diff.py --port", "practice_diff.py", ["3000", "--port"]),   # stat practice (combat.md)
          ("enemy_diff.py --port", "enemy_diff.py", ["3000", "--port"]),     # enemy moves (strategic.md)
+         ("enemy_diff.py --port --fan", "enemy_diff.py", ["3000", "--port", "--fan", "16"]),     # #70 fan fix F16 vs the 1.15m EnemyMoves? bytes (plant attack)
          ("strips_diff.py --port", "strips_diff.py", ["500", "--port"]),   # the interface strips (panel.md)
          ("mappanel_diff.py --port", "mappanel_diff.py", ["300", "--port"]),   # the map panel (strategic.md)
          ("msgbox_diff.py --port", "msgbox_diff.py", ["1000", "--port"]),   # the message box (panel.md)
@@ -143,6 +206,7 @@ EXTRA = [("compose_diff.py --flight", "compose_diff.py", ["--flight", "20", "bui
          ("aimstats_diff.py --port", "aimstats_diff.py", ["300", "--port"]),   # the A.I.M. statistics page (strategic.md)
          ("salary_diff.py --port", "salary_diff.py", ["200", "--port"]),   # the A.I.M. salary panel (strategic.md)
          ("itemvoice_diff.py --port", "itemvoice_diff.py", ["1500", "--port"]),   # the item's voice (panel.md)
+         ("voice_diff.py --pfix 18", "voice_diff.py", ["--pfix", "18"]),   # #71 port fix P18 (#2 row 51: a missing name sample plays nothing, not another merc's name) vs the original with the cave at LoadVocSample 0x5C98B
          ("raisebox_diff.py --port", "raisebox_diff.py", ["300", "--port"]),   # the salary box of the raise (strategic.md)
          ("loadface_diff.py --port", "loadface_diff.py", ["400", "--port"]),   # a merc face into a slot's face buffer (panel.md)
          ("loadpopup_diff.py --port", "loadpopup_diff.py", ["16", "--port"]),   # the drown / injection popup frames (panel.md)
@@ -160,7 +224,18 @@ EXTRA = [("compose_diff.py --flight", "compose_diff.py", ["--flight", "20", "bui
          ("onscreen_diff.py --port", "onscreen_diff.py", ["3000", "--port"]),   # OnScreen 0x1FC34, the on-screen test (select.md)
          ("ovmouse_diff.py --port", "ovmouse_diff.py", ["3000", "--port"]),   # overview mouse step 0x24630 (panel.md)
          ("keyhandler_diff.py --port", "keyhandler_diff.py", ["6000", "--port"]),   # key part of 0x13490 (tactkeys.rs)
+         ("keyhandler_diff.py --port --fan", "keyhandler_diff.py", ["6000", "--port", "--fan", "67"]),   # #70 fan fix F67 vs the 1.15m key sites (cursor item back before Alt+R/S/X, strip reload after the boxes)
+         ("keyhandler_diff.py --port --pfix 21", "keyhandler_diff.py", ["6000", "--port", "--pfix", "21"]),   # #71 port fix P21 (#2 row 63: key D does nothing while an enemy interrupt waits) vs the original with the cave at 0x13DE8 (no EndTurn while turn_moves != 0)
          ("viewmode_diff.py --port", "viewmode_diff.py", ["4000", "--port"]),   # view modes 0x248E4 + keys (panel.md View modes)
+         ("cursor_diff.py --fan 46", "cursor_diff.py", ["3000", "--fan", "46"]),   # #70 fan fix F46 (row 60 part: the target mark needs a visible soldier) vs the 1.15m DrawTargetMark? bytes
+         ("ovmouse_diff.py --port --fan 46,61", "ovmouse_diff.py", ["3000", "--port", "--fan", "46,61"]),   # #70 fan fixes F46 (row 60 rest: overview press on a merc under 15 hp / an unseen soldier) + F61 (row 87: held item back before the select) vs the 1.15m OverviewMouse bytes
+         ("click_diff.py --fan 61", "click_diff.py", ["3000", "--fan", "61"]),   # #70 fan fix F61 (row 87): UseItemAt 0x1DD83 puts a held item back before the select, vs the 1.15m call
+         ("slotmouse_diff.py --port --fan 61", "slotmouse_diff.py", ["2000", "--port", "--fan", "61"]),   # #70 fan fix F61 (row 87): a portrait click (SlotMouse 0x11B24) puts a held item back before the select
+         ("playloop_diff.py --fan 62", "playloop_diff.py", ["120", "--fan", "62"]),   # #70 fan fix F62 (row 72): an end code still runs the last day (DayEndScreen, verdict = end code); a lost game ends with the rating, vs the 1.15m PlayLoop bytes
+         ("payday_diff.py --port --fan 63", "payday_diff.py", ["1000", "--port", "--fan", "63"]),   # #70 fan fix F63 (row 65): an unpaid live merc leaves a debt, a dead merc's family gets CorpseGrudge?, vs the 1.15m PayDayDialog? bytes
+         ("aim_diff.py --port --fan 64", "aim_diff.py", ["1200", "--port", "--fan", "64"]),   # #70 fan fix F64 (row 47): opening A.I.M. keeps a merc already away on a job, vs the 1.15m AimScreen opening block
+         ("viewmode_diff.py --port --fan 45", "viewmode_diff.py", ["4000", "--port", "--fan", "45"]),   # #70 fan fix F45 (row 80: Insert toggles the revealed overview) vs the 1.15m TacticalKeyHandler Insert bytes
+         ("viewmode_diff.py --port --pfix 15", "viewmode_diff.py", ["4000", "--port", "--pfix", "15"]),   # #71 port fix P15 (#2 row 33: the overview holds mode-1 coordinates, the view no longer moves after PgUp x4) vs the original with the P15 patch
          ("assign_diff.py --port", "assign_diff.py", ["300", "--port"]),   # the assignment picture (strategic.md)
          ("payroll_diff.py --port", "payroll_diff.py", ["200", "--port"]),   # the payroll screen (strategic.md)
          ("xpcount_diff.py --port", "xpcount_diff.py", ["120", "--port"]),   # the experience count (strategic.md)
@@ -191,11 +266,14 @@ EXTRA = [("compose_diff.py --flight", "compose_diff.py", ["--flight", "20", "bui
          ("mouselimit_diff.py", "mouselimit_diff.py", ["400"]),   # SetMouseLimit? 0x682AC with the driver call stubbed
          ("facelight_diff.py", "facelight_diff.py", ["300"]),   # the light frame of a merc face: 0x46A4C, buffers after a load
          ("stripbuttons_diff.py", "stripbuttons_diff.py", []),   # the top strip buttons up and shaded: panel, screen, table
+         ("stripbuttons_diff.py --fan", "stripbuttons_diff.py", ["1000", "--fan", "14"]),   # #70 fan fix F14 vs the 1.15m StopWalk bytes
          ("invextra_diff.py", "invextra_diff.py", []),   # an inventory remark: sound, box wait, sound wait, keys left
          ("cursorback_diff.py", "cursorback_diff.py", []),   # the cursor item back to its strip box
+         ("cursorback_diff.py --pfix 22", "cursorback_diff.py", ["300", "--pfix", "22"]),   # #71 port fix P22 (#2 row 64: a held item at day end goes to an empty place or the ground, not over the shown strip box) vs the original with the cave at 0x536BD
          ("guardopen_diff.py", "guardopen_diff.py", []),   # key M: the way to the guard screen and back
          ("aimtalk_diff.py", "aimtalk_diff.py", []),   # the A.I.M. quote box: box or no box, face, point, time
          ("aimquote_diff.py", "aimquote_diff.py", []),   # the text of an A.I.M. refusal box: StrReplace bug, g_textBuf, last quote
+         ("aimquote_diff.py --fan", "aimquote_diff.py", ["--fan", "all"]),   # #70 fan fixes on vs the 1.15m code (F04 StrReplace)
          ("raiseask_diff.py", "raiseask_diff.py", []),   # the quote boxes of a salary raise: reason, grudge name, answers, buffers
          ("exitdos_diff.py", "exitdos_diff.py", []),   # Exit to DOS: box, ends or not, Quick Save, files, quit line, seed
          ("continue_diff.py", "continue_diff.py", []),   # the prompt at the program start: answer, steps, palette, boxes, files
@@ -210,17 +288,22 @@ EXTRA = [("compose_diff.py --flight", "compose_diff.py", ["--flight", "20", "bui
          ("credits_diff.py --port", "credits_diff.py", ["--port"]),   # the credits after the win (ending.md)
          ("credits_diff.py --title --port", "credits_diff.py", ["--title", "--port"]),   # the title part at the program start
          ("slots_diff.py --port", "slots_diff.py", ["300", "--port"]),     # the save / restore slot list (strategic.md)
+         ("slots_diff.py --port --pfix 7", "slots_diff.py", ["300", "--port", "--pfix", "7"]),     # #71 port fix P07 (#2 rows 26 + 27: Home/arrows/End/Delete on the save name line move the cursor, no sign in the name) vs the original with the cave at SaveSlotNameInput? 0x4E075; no case may crash
          ("newgame_diff.py --port", "newgame_diff.py", ["30", "--port"]),  # a new game (world_load.md section 11)
+         ("newgame_diff.py --port --fan 31", "newgame_diff.py", ["12", "--port", "--fan", "31"]),  # #70 fan fix F31: a new game after a game vs the 1.15m NewGameInit cave 0x18FE9 (notes found flags cleared)
          ("aim_diff.py --port", "aim_diff.py", ["1200", "--port"]),  # strategic.md The A.I.M. screen (refusal, hire, cancel, browse)
+         ("aimpage_diff.py --port --pfix 10", "aimpage_diff.py", ["300", "--port", "--pfix", "10"]),   # #71 port fix P10 (#2 row 46: no stray pixels above the A.I.M. name) vs the original with area 4 saved before area 5 (ShowAimScreen 0x1FF2D)
          ("duty_diff.py --port", "duty_diff.py", ["300", "--port"]),   # the duty menu (strategic.md)
          ("select_diff.py --port", "select_diff.py", ["300", "--port"]),   # merc selection, item panel (strategic.md)
          ("assign_panel_diff.py --port", "assign_panel_diff.py", ["500", "--port"]),   # panel buttons (strategic.md)
          ("assign_hover_diff.py --port", "assign_hover_diff.py", ["300", "--port"]),   # hover + tooltip box (strategic.md, panel.md)
          ("assign_items_diff.py --port", "assign_items_diff.py", ["1000", "--port"]),   # item moves on the assignment screen (strategic.md)
+         ("assign_items_diff.py --port --pfix 5,6", "assign_items_diff.py", ["1000", "--port", "--pfix", "5,6"]),   # #71 port fixes P05 (#2 row 19: a press on a store place with an empty store takes nothing, no info) + P06 (#2 row 20: key E keeps an item the store does not take; 0x5217C) vs the original with caves at AssignScreen? 0x49E51 / 0x4A083; no empty-store filter
          # more cases than the split run gives these sections: the difficulty bonus and each word of the rest table
          # decide only a few cases (Insert #11820: ledger rows ja1logic:9946, ja1logic:8501).
          ("ai_diff.py --port contest", "ai_diff.py", ["--port", "--only", "merc_interrupt,enemy_interrupt,turn_rest", "18000"]),
          ("sight_diff.py", "sight_diff.py", ["3000"]),                       # sight line, library op 49 (ai.md)
+         ("sight_diff.py --fan", "sight_diff.py", ["8000", "--fan", "all"]),  # #70 fan fixes on vs the 1.15m code + window table (F07)
          ("pure_diff.py --port", "pure_diff.py", ["20000", "--port"]),
          ("compose_diff.py --port", "compose_diff.py", ["--port", "25", "build/mem_a10.bin", "build/mem_a35.bin",
                                                        "build/mem_combat1.bin", "build/mem_death1.bin", "build/mem_f3.bin",
@@ -274,11 +357,33 @@ GATE_SPEED_PARTS = ["day", "walk", "slide", "msgbox"]
 # in a run fails too, unless that run recorded a skip for that family's label (Insert #11623). A rename of a test in
 # the check renames its CASE_FLOORS key in the same commit.
 CASE_FLOORS = {
+    "fanfix_diff.py": {"xra": 1500, "maxap": 2900, "melee": 2900, "aim": 2900, "throw": 2900, "throw89": 2900, "aim93": 2900, "throw93": 2900},  # #70 F01 (59 sectors x 16 templates x on/off = 1888), F06 sites (1500 cases x 2 rounds)
     "font_diff.py": {"font": 2000},
     "aimleave_diff.py": {"aimleave": 1600},
     "slots_diff.py --port": {"slots": 280},
     "newgame_diff.py --port": {"newgame": 30},
     "aim_diff.py --port": {"aim": 1200},
+    "ai_diff.py --port --fan take_damage": {"take_damage": 2400},   # #70 F08..F11
+    "ai_diff.py --port --fan end_task": {"end_task": 2400},   # #70 F12
+    "ai_diff.py --port --fan walk_end": {"walk_end": 2400},   # #70 F14
+    "ai_diff.py --port --fan leave_sector": {"leave_sector": 1600},   # #70 F22
+    "ai_diff.py --port --fan anim_step": {"anim_step": 4800},   # #70 F23
+    "ai_diff.py --port --fan anim_frame": {"anim_frame": 4800},   # #70 F23 AnimFrame part
+    "ai_diff.py --port --fan active_frame": {"active_frame": 4000},
+    "ai_diff.py --port --pfix door_fx": {"door_fx": 1600},   # #71 P01   # #70 F24, F25
+    "ai_diff.py --port --fan ledger": {"ledger": 2400},   # #70 F26
+    "ai_diff.py --port --pfix ledger": {"ledger": 2400},   # #71 P03
+    "ai_diff.py --port --pfix sector_start": {"sector_start": 90},   # #71 P16
+    "ai_diff.py --port --fan turn_end": {"enemies_turn": 800, "end_turn": 800},   # #70 F15, F18
+    "ai_diff.py --port --fan fuses": {"fuses": 1600, "ticks": 3200},   # #70 F18
+    "ai_diff.py --port --fan turn_new": {"new_turn": 2400},   # #70 F19, F20
+    "ai_diff.py --port --fan end_of_day": {"end_of_day": 160},   # #70 F21
+    "ai_diff.py --port --fan sight_check": {"sight_check": 800, "mark_seen": 800, "guard_turned": 800},   # #70 F17
+    "ai_diff.py --port --fan swap_places": {"swap_places": 800},   # #70 F13
+    "ai_diff.py --port --fan worn_options": {"throw_option": 400, "gun_option": 400, "knife_option": 400},   # #70 F43
+    "ai_diff.py --port --fan worn_ai": {"engaged_action": 400, "calm_action": 400, "can_stand_at": 400},   # #70 F43
+    "ai_diff.py --port --fan sector_start": {"sector_start": 160},   # #70 F44 (199 cases)
+    "ai_diff.py --port --fan worn_shot": {"launch": 400, "w_56dd4": 400, "turn_rest": 400, "blast_tile": 400},   # #70 F43
     "ai_diff.py --port use_on_tile": {"use_on_tile": 2400},
     "ai_diff.py --port soldier_frame": {"soldier_frame": 3200},
     "ai_diff.py --port decide": {"engaged_action": 1600, "combat_action": 1600, "alert_action": 1600, "calm_action": 1600, "think": 1600},
@@ -324,7 +429,7 @@ CASE_FLOORS = {
         "item_patch": 800, "ground_blast": 1600, "tmp_file": 160, "shot_ap": 2400, "action_ap": 2400,
         "quest_check": 1600, "radio_result": 1600, "view": 3200, "move": 3200, "loop": 3200, "loop_rest": 1600,
         "kept_turn": 600, "sector_won": 1600, "fuses": 1600, "loop_head": 1600, "leave_tests": 800, "ticks": 3200, "rebuild": 16, "doors": 800,
-        "object_surface": 204, "put_item": 3200, "effect_hit": 2400, "itq_pop": 1067, "next_turn": 1066,
+        "object_surface": 204, "put_item": 3200, "effect_hit": 2400, "effect_pass": 4000, "itq_pop": 1067, "next_turn": 1066,
         "interrupt_turn": 1066, "turn_start": 1600, "ally_alert": 1600, "escape_stop": 2400, "select_merc": 1600,
         "select_soldier": 1600, "first_merc": 800, "turn_sightings": 800, "enemies_turn": 800, "end_turn": 800,
         "mercs_turn": 800, "new_turn": 2400, "explode": 2400, "door_fx": 3200, "reload": 1600, "leave_sector": 1600,
@@ -410,6 +515,8 @@ def run(name, cmd):
         RUNNING.add(name)
         livecast.suite(len(STEPS), TOTAL[0], ", ".join(sorted(RUNNING)), sum(STEPS), len(STEPS) - sum(STEPS))
     env = dict(os.environ)
+    # Insert #13554: mute_when_away is on by default now; a test window under Xvfb may have no keyboard focus.
+    env.setdefault("JA1_MUTE_UNFOCUSED", "0")
     if any("validate/diff/" in c for c in cmd):    # which original functions each diff test runs (gate_diff_tested.py)
         env["JA1_EMU_COV"] = os.path.join(COV_DIR, re.sub(r"[^\w.-]+", "_", name) + ".txt")
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=env)

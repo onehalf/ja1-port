@@ -40,6 +40,65 @@ const SECTOR_ROWS: usize = 60;
 const SECTOR_ROW: usize = 0xB1;
 /// Bytes per sector in DAT\XRA.DAT (16 soldier templates, 3136 tile bytes, 50 ground items).
 const XRA_RECORD: i32 = 0x2E98;
+
+/// Fan fix F01 (#70; changelog 1.15x "Fixed errors in game data file pertaining to enemy spawn points", found by
+/// DarzaR; our own table, the 1.15m file does not ship): the 27 bytes
+/// that the 1.15m DAT/XRA.DAT changes in the soldier templates of the 1.13b file, as (XRA record = sector, offset in
+/// the 0x2E98-byte record, 1.13b byte, 1.15m byte). The offsets are below 0x2000: all in the 16 templates of 0x200
+/// bytes (+0x114/+0x116/+0x118 start tiles, +0x17B colour, +0x18D). validate/diff/fanfix_diff.py part xra compares
+/// the result with the 1.15m file.
+const XRA_F01: [(u8, u16, u8, u8); 27] = [
+    (5, 0x098D, 152, 76),
+    (7, 0x0718, 201, 1),
+    (7, 0x0719, 3, 4),
+    (9, 0x0714, 50, 106),
+    (14, 0x0918, 41, 241),
+    (14, 0x0919, 5, 4),
+    (15, 0x0316, 68, 12),
+    (16, 0x0918, 54, 110),
+    (16, 0x0F14, 249, 193),
+    (24, 0x0B14, 65, 209),
+    (24, 0x0B15, 12, 11),
+    (26, 0x0118, 43, 99),
+    (28, 0x0118, 16, 216),
+    (28, 0x0119, 5, 4),
+    (29, 0x0316, 171, 172),
+    (30, 0x0114, 0, 16),
+    (30, 0x0115, 0, 7),
+    (31, 0x0D16, 67, 11),
+    (35, 0x097B, 72, 13),
+    (42, 0x0D16, 31, 87),
+    (44, 0x0114, 113, 57),
+    (44, 0x0116, 99, 43),
+    (44, 0x0B14, 136, 80),
+    (50, 0x0F7B, 74, 14),
+    (51, 0x0114, 89, 88),
+    (54, 0x0D8D, 0, 10),
+    (54, 0x1D8D, 0, 10),
+];
+
+/// Fix F01 on template `r` (0..15, file order) of XRA record `sector`, as read: the 1.15m bytes.
+pub fn xra_fan_fix(sector: usize, r: usize, rec: &mut [u8]) {
+    if !crate::fanfix::on(1) {
+        return;
+    }
+    for &(s, off, _, new) in XRA_F01.iter() {
+        let o = off as usize;
+        if s as usize == sector && o / REC == r && o % REC < rec.len() {
+            rec[o % REC] = new;
+        }
+    }
+}
+
+/// C interface for fanfix_diff.py: fix F01 on one template read (`rec` = 0x200 bytes).
+#[no_mangle]
+pub extern "C" fn ja1_xra_fan_fix(sector: i32, r: i32, rec: *mut u8) {
+    if rec.is_null() || !(0..16).contains(&r) {
+        return;
+    }
+    let b = unsafe { std::slice::from_raw_parts_mut(rec, REC) };
+    xra_fan_fix(sector as usize, r as usize, b);
+}
 const XRA_ITEMS: usize = 50;
 const GUARD_DIRS: [u8; 8] = [2, 6, 4, 8, 1, 5, 3, 7];
 
@@ -842,7 +901,21 @@ impl Ctx {
             let mut base = tile;
             while !is_placed(&placed, self.g8(k, 0x17A) as usize) {
                 let mut found = false;
-                for d in 1..=8 {
+                for i in 0..8u8 {
+                    // #70 F35 (row 27): 1.15m 0x2B5B7 starts the ring at the facing: d = Wrap(facing + i) (helper
+                    // 0x1FD10: above 8 minus 8, below 1 plus 8, on the low byte), so the group keeps its shape in
+                    // every direction, not only north. 1.13b tries 1..8. SPEC GAP: a facing of 0x79..0xF8 (callers
+                    // give 1..8) makes DirStep read past its table in the original; the port's buffer read gives 0.
+                    let d = if crate::fanfix::on(35) {
+                        let a = facing.wrapping_add(i);
+                        match a as i8 {
+                            v if v > 8 => a.wrapping_sub(8),
+                            v if v < 1 => a.wrapping_add(8),
+                            _ => a,
+                        }
+                    } else {
+                        i + 1
+                    } as i32;
                     let mut c = self.step_dir(base, d);
                     if ring2 {
                         c = self.step_dir(c, d);
@@ -973,24 +1046,25 @@ impl Ctx {
     }
 
     // ---- Put item ----
-    fn put_item(&self, tile: i32, item: *const u8, b6: u8, exact: u8, note: u8, near: u8) {
+    /// Returns the destination tile when step 5 ran, else `tile` (see put_item_at).
+    fn put_item(&self, tile: i32, item: *const u8, b6: u8, exact: u8, note: u8, near: u8) -> i32 {
         let it = |i: usize| unsafe { *item.add(i) };
         // SPEC GAP: a null ground_items buffer does nothing.
         if unsafe { (*self.w).ground_items }.is_null() {
-            return;
+            return tile;
         }
         // 1.
         let ty = it(0);
         if ty == 0 {
-            return;
+            return tile;
         }
         // 2.
         if note != 0 && self.note_placed(ty) {
-            return;
+            return tile;
         }
         // 3.
         if self.water(tile) && self.item_type(ty, 13) != 0 {
-            return;
+            return tile;
         }
         // 4.
         let k = (0..GROUND).find(|&k| self.gi(k, 0) == 0).unwrap_or(GROUND); // FreeGroundItem? 0x2390C
@@ -1020,7 +1094,30 @@ impl Ctx {
             }
         }
         // 7.
-        if dest != tile {
+        if dest != tile && crate::fanfix::on(50) {
+            // F50 (1.15m PutItem 0x3FE2E -> cave 0x488A6): no swap when the old item's +6 is -1 or a timed effect
+            // record names the asked tile (then the cave still writes dest +6 = k); else the blast list entry of
+            // the asked tile moves to dest with the old item.
+            let g = self.tile_g(tile);
+            if g < 0xFF {
+                let fx = unsafe { (*self.w).timed_fx };
+                let timed = !fx.is_null()
+                    && (0..5).any(|i| unsafe { u16::from_le_bytes([*fx.add(13 * i + 6), *fx.add(13 * i + 7)]) } == tile as u16);
+                if (self.gi(g as usize, 6) as i8) == -1 || timed {
+                    self.tile_put(dest, 6, k as u8);
+                } else {
+                    if self.blast_has(tile) {
+                        self.blast_remove(tile);
+                        self.blast_add(dest);
+                    }
+                    self.tile_put(tile, 6, k as u8);
+                    if dest != NONE as i32 {
+                        self.tile_put(dest, 6, g);
+                    }
+                    return tile; // the cave swaps EDI to the asked tile: 1.15m PutItem returns it
+                }
+            }
+        } else if dest != tile {
             let g = self.tile_g(tile);
             if g < 0xFF && (self.gi(g as usize, 6) as i8) != -1 {
                 self.tile_put(tile, 6, k as u8);
@@ -1029,12 +1126,40 @@ impl Ctx {
                 }
             }
         }
+        dest
     }
 
     // ---- helpers (batch 4) ----
     fn listed(&self, ty: u8) -> bool {
         let p = unsafe { (*self.w).listed };
         ty != 0 && (0..LISTED).any(|i| Self::table(p, LISTED, i) == ty)
+    }
+    /// BlastListHas? 0x3B6F0: is `t` one of the 30 words of the blast list?
+    fn blast_has(&self, t: i32) -> bool {
+        let p = unsafe { (*self.w).blast_list };
+        !p.is_null() && (0..BLAST).any(|k| unsafe { u16::from_le_bytes([*p.add(2 * k), *p.add(2 * k + 1)]) as i16 as i32 } == t)
+    }
+    /// BlastListAdd? 0x3B744: `t` into the first free (0xC41) word unless it is there already (the scan stops at
+    /// the first free word).
+    fn blast_add(&self, t: i32) {
+        let p = unsafe { (*self.w).blast_list };
+        if p.is_null() {
+            return;
+        }
+        for k in 0..BLAST {
+            let v = unsafe { u16::from_le_bytes([*p.add(2 * k), *p.add(2 * k + 1)]) as i16 as i32 };
+            if v == t {
+                return;
+            }
+            if v == NONE as i32 {
+                let [lo, hi] = (t as u16).to_le_bytes();
+                unsafe {
+                    *p.add(2 * k) = lo;
+                    *p.add(2 * k + 1) = hi;
+                }
+                return;
+            }
+        }
     }
     fn blast_remove(&self, t: i32) {
         let p = unsafe { (*self.w).blast_list };
@@ -1085,7 +1210,9 @@ impl Ctx {
         let g = self.tile_g(tile) as usize;
         if self.tile_get(tile, 1) == 0x86 {
             self.tile_put(tile, 1, 0);
-            self.rebuild_move_codes();
+            if !crate::flag_cleared_codes(self.w, tile) {
+                self.rebuild_move_codes();
+            }
         }
         // 3.
         self.blast_remove(tile);
@@ -2002,7 +2129,8 @@ impl Ctx {
             self.host(op::SEEK, &[(self.cur() as i32).wrapping_mul(XRA_RECORD)]);
             for want in [2i8, 1] {
                 for k in 0x28..0x30 {
-                    let got = self.read(REC);
+                    let mut got = self.read(REC);
+                    xra_fan_fix(self.cur(), (k - 0x28) + if want == 2 { 0 } else { 8 }, &mut got);
                     let dst = if self.s_get(0x6E + k) as i8 == want {
                         self.rec(k)
                     } else {
@@ -2072,6 +2200,19 @@ impl Ctx {
                             }
                             ep(o, u);
                             j += 1;
+                        }
+                    }
+                }
+                // Port fix P16 (#2 row 36): a demolition charge (0x71) with E[1] = 0x63 (kind 100: no blast; DAT/XRA.DAT
+                // 1.13b sector 26 entry 14, the CD file also sector 23 entries 6, 7) gets the kind of the sector's first
+                // other charge. Type 0x71 does not stack, so the condition loop above did not read E[1].
+                if crate::fanfix::port_on(16) {
+                    let charge = |i: usize| self.gi(i, 0) == 0x71;
+                    if let Some(k) = (0..XRA_ITEMS).find(|&i| charge(i) && self.gi(i, 1) != 0x63).map(|i| self.gi(i, 1)) {
+                        for i in 0..XRA_ITEMS {
+                            if charge(i) && self.gi(i, 1) == 0x63 {
+                                self.gi_put(12 * i + 1, k);
+                            }
                         }
                     }
                 }
@@ -2249,6 +2390,13 @@ impl Ctx {
         .min(3);
         let mut slot = 8usize;
         let mut placed = 0i32;
+        // F44 (1.15 jan 08 changelog, "fake guards in proportion to tappers", found by DarzaR; 1.15m
+        // SetupSectorFromXra 0x2F580): the guards placed at the tapper groups stop at the sector's guard count.
+        // 1.13b places one per group when there are fewer guards than groups, so extra guards appear.
+        let mut target = groups * per;
+        if crate::fanfix::on(44) && target > gd {
+            target = gd;
+        }
         let place_guard = |slot: usize, c: i32, f: u8, tr: u8, anchor: i32| {
             // SPEC GAP: a slot of 48 or more is not set up.
             if slot < SLOTS {
@@ -2269,7 +2417,7 @@ impl Ctx {
                     slot += 1;
                     placed += 1;
                 }
-                if placed >= groups * per {
+                if placed >= target {
                     break;
                 }
             }
@@ -2397,12 +2545,15 @@ impl Ctx {
 // ================= Batch 9: replace and reserve AP =================
 /// Blast kind of an item type y (sector_start.md batch 9).
 /// Put item (batch 3) for the library's other procedures (shooting.md batch 4 Kill); `item` = 12 readable bytes.
-pub(crate) fn put_item_at(w: *mut Ja1World, h: *const Ja1Host, tile: i32, item: *const u8, b6: u8, exact: u8, note: u8, near: u8) {
+/// Returns the tile PutItem chose (1.15m PutItem 0x3FE43 hands it back in EAX; 1.13b callers ignore EAX): the
+/// destination once the search ran (0xC41 when none), else `tile`.
+pub(crate) fn put_item_at(w: *mut Ja1World, h: *const Ja1Host, tile: i32, item: *const u8, b6: u8, exact: u8, note: u8, near: u8) -> i32 {
     if item.is_null() {
-        return;
+        return tile;
     }
-    if let Some(c) = Ctx::new(w, h) {
-        c.put_item(tile, item, b6, exact, note, near);
+    match Ctx::new(w, h) {
+        Some(c) => c.put_item(tile, item, b6, exact, note, near),
+        None => tile,
     }
 }
 /// Listed (batch 4) for the library's other procedures.
